@@ -1,0 +1,88 @@
+#ifndef FAKE_STDLIB_H
+#define FAKE_STDLIB_H
+
+typedef unsigned int size_t;
+typedef int ssize_t;
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef short int16_t;
+typedef unsigned short uint16_t;
+typedef int int32_t;
+typedef unsigned int uint32_t;
+typedef long long int64_t;
+typedef unsigned long long uint64_t;
+typedef int intptr_t;
+typedef unsigned int uintptr_t;
+typedef int wchar_t;
+
+#define NULL ((void*)0)
+
+// Límites estándar
+#define INT_MAX 2147483647
+#define INT_MIN (-2147483648)
+#define SHRT_MAX 32767
+#define SHRT_MIN (-32768)
+#define CHAR_MAX 127
+#define CHAR_MIN (-128)
+#define SCHAR_MAX 127
+#define SCHAR_MIN (-128)
+#define UCHAR_MAX 255
+#define USHRT_MAX 65535
+#define UINT_MAX 4294967295U
+
+// stdarg
+typedef __builtin_va_list va_list;
+#define va_start(v,l) __builtin_va_start(v,l)
+#define va_end(v) __builtin_va_end(v)
+#define va_arg(v,l) __builtin_va_arg(v,l)
+
+// FILE
+typedef struct { int dummy; } FILE;
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+extern FILE *stderr;
+
+// ctype
+#define isalpha(c) 1
+#define isdigit(c) 1
+#define isalnum(c) 1
+#define isspace(c) 1
+#define isupper(c) 1
+#define islower(c) 1
+#define toupper(c) (c)
+#define tolower(c) (c)
+
+// Declaraciones de funciones (implementadas en doom_utils.c o en kernel)
+void *malloc(size_t size);
+void free(void *ptr);
+void abort(void);
+int abs(int j);
+long int labs(long int j);
+int atoi(const char *s);
+long int strtol(const char *s, char **end, int base);
+int strcasecmp(const char *s1, const char *s2);
+int strncasecmp(const char *s1, const char *s2, size_t n);
+char *strdup(const char *s);
+void exit(int status);
+
+double sin(double x);
+double cos(double x);
+double sqrt(double x);
+double fabs(double x);
+double pow(double x, double y);
+double floor(double x);
+double ceil(double x);
+
+FILE *fopen(const char *path, const char *mode);
+int fclose(FILE *stream);
+size_t fread(void *ptr, size_t size, size_t count, FILE *stream);
+size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
+int feof(FILE *stream);
+int ferror(FILE *stream);
+int fprintf(FILE *stream, const char *fmt, ...);
+int vfprintf(FILE *stream, const char *fmt, va_list args);
+
+#endif

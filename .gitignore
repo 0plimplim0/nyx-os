@@ -1,0 +1,43 @@
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Build artifacts
+*.bin
+*.iso
+*.cpio.gz
+NyxOS.iso
+
+# Cross-compiler
+cross/
+i686-elf-tools-linux.zip
+
+# Toolchain source directories
+binutils-2.41/
+build-binutils/
+gcc-13.2.0/
+
+# Source tarballs
+*.tar.gz
+
+# QEMU logs
+qemu.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Initramfs (has symlinks that break on Windows)
+initramfs/
+
+# DOOM is a submodule
+DOOM/
+
+# OS files
+Thumbs.db
+.DS_Store
