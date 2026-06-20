@@ -28,7 +28,14 @@ static int socket_count = 0;
 void init_net(void) {
     memset_asm(sockets, 0, sizeof(sockets));
     memset_asm(net_interfaces, 0, sizeof(net_interfaces));
-    printf("[NET] Network stack initialized\n");
+    // Loopback interface
+    net_iface_t* lo = &net_interfaces[0];
+    strcpy(lo->name, "lo");
+    lo->ip = 0x7F000001;
+    lo->netmask = 0xFF000000;
+    lo->mtu = 65536;
+    lo->flags = 1;
+    printf("[NET] Network stack initialized (lo: 127.0.0.1)\n");
 }
 
 int net_create_socket(int domain, int type, int protocol) {

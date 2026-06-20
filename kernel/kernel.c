@@ -132,6 +132,16 @@ static void cmd_keylog(int argc, char** argv);
 static void cmd_backdoor(int argc, char** argv);
 static void cmd_bdshell(int argc, char** argv);
 static void cmd_layout(int argc, char** argv);
+static void cmd_ls(int argc, char** argv);
+static void cmd_cd(int argc, char** argv);
+static void cmd_pwd(int argc, char** argv);
+static void cmd_cat(int argc, char** argv);
+static void cmd_touch(int argc, char** argv);
+static void cmd_mkdir(int argc, char** argv);
+static void cmd_rm(int argc, char** argv);
+static void cmd_cp(int argc, char** argv);
+static void cmd_mv(int argc, char** argv);
+static void cmd_ifconfig(int argc, char** argv);
 
 static const command_t commands[] = {
     {"help",      cmd_help,      "Show this help", false},
@@ -158,6 +168,16 @@ static const command_t commands[] = {
     {"modules",   cmd_modules,   "List loaded modules", false},
     {"crash",     cmd_crash,     "Trigger a kernel panic", false},
     {"layout",    cmd_layout,    "Change keyboard layout: layout <us|es>", false},
+    {"ls",        cmd_ls,        "List directory contents: ls [path]", false},
+    {"cd",        cmd_cd,        "Change directory: cd <path>", false},
+    {"pwd",       cmd_pwd,       "Print working directory", false},
+    {"cat",       cmd_cat,       "Display file contents: cat <file>", false},
+    {"touch",     cmd_touch,     "Create empty file: touch <file>", false},
+    {"mkdir",     cmd_mkdir,     "Create directory: mkdir <dir>", false},
+    {"rm",        cmd_rm,        "Remove file or directory: rm <path>", false},
+    {"cp",        cmd_cp,        "Copy file: cp <src> <dst>", false},
+    {"mv",        cmd_mv,        "Move/rename file: mv <src> <dst>", false},
+    {"ifconfig",  cmd_ifconfig,  "Show network interfaces", false},
     {NULL, NULL, NULL, false}
 };
 
@@ -568,6 +588,69 @@ static void cmd_layout(int argc, char** argv) {
     }
 }
 
+static void cmd_ls(int argc, char** argv) {
+    vfs_list_dir(argc > 1 ? argv[1] : NULL);
+}
+
+static void cmd_cd(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: cd <path>\n"); return; }
+    if (vfs_chdir(argv[1]) < 0) printf("cd: %s: No such directory\n", argv[1]);
+}
+
+static void cmd_pwd(int argc, char** argv) {
+    (void)argc; (void)argv;
+    printf("%s\n", vfs_getcwd());
+}
+
+static void cmd_cat(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: cat <file>\n"); return; }
+    vfs_cat_file(argv[1]);
+    putchar('\n');
+}
+
+static void cmd_touch(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: touch <file>\n"); return; }
+    if (vfs_touch(argv[1]) < 0) printf("touch: failed to create %s\n", argv[1]);
+}
+
+static void cmd_mkdir(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: mkdir <dir>\n"); return; }
+    if (vfs_mkdir(argv[1], 0755) < 0) printf("mkdir: failed to create %s\n", argv[1]);
+}
+
+static void cmd_rm(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: rm <path>\n"); return; }
+    if (vfs_unlink(argv[1]) < 0) printf("rm: failed to remove %s\n", argv[1]);
+}
+
+static void cmd_cp(int argc, char** argv) {
+    if (argc < 3) { printf("Usage: cp <src> <dst>\n"); return; }
+    if (vfs_cp(argv[1], argv[2]) < 0) printf("cp: failed to copy %s to %s\n", argv[1], argv[2]);
+}
+
+static void cmd_mv(int argc, char** argv) {
+    if (argc < 3) { printf("Usage: mv <src> <dst>\n"); return; }
+    vfs_rename(argv[1], argv[2]);
+}
+
+static void cmd_ifconfig(int argc, char** argv) {
+    (void)argc; (void)argv;
+    printf("Network interfaces:\n");
+    for (int i = 0; i < 8; i++) {
+        if (net_interfaces[i].name[0]) {
+            printf("%s  HWaddr %02x:%02x:%02x:%02x:%02x:%02x  IP %d.%d.%d.%d\n",
+                net_interfaces[i].name,
+                net_interfaces[i].mac[0], net_interfaces[i].mac[1],
+                net_interfaces[i].mac[2], net_interfaces[i].mac[3],
+                net_interfaces[i].mac[4], net_interfaces[i].mac[5],
+                (net_interfaces[i].ip >> 24) & 0xFF,
+                (net_interfaces[i].ip >> 16) & 0xFF,
+                (net_interfaces[i].ip >> 8) & 0xFF,
+                net_interfaces[i].ip & 0xFF);
+        }
+    }
+}
+
 // ============================================================
 // Backdoor shell
 // ============================================================
@@ -842,7 +925,7 @@ void launch_shell(void) {
 
     while (1) {
         set_terminal_color(vga_entry_color(VGA_LIGHT_GREEN, VGA_BLACK));
-        printf("nyx# ");
+        printf("nyx:%s$ ", vfs_getcwd());
 
         while (1) {
             char c = getchar();

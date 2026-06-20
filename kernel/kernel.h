@@ -467,6 +467,15 @@ uint8_t get_terminal_color(void);
 
 void init_ext2(void);
 
+// New VFS helpers
+const char* vfs_getcwd(void);
+int vfs_chdir(const char* path);
+void vfs_list_dir(const char* path);
+void vfs_cat_file(const char* path);
+int vfs_touch(const char* path);
+int vfs_cp(const char* src, const char* dst);
+void vfs_rename(const char* old, const char* new);
+
 // ===== STUBS PARA MÓDULOS (declaraciones) =====
 int net_create_raw_socket(void);
 void kernel_thread_create(const char *name, void (*func)(void), void *arg);

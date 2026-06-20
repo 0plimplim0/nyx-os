@@ -1,25 +1,185 @@
-// vfs.c - Stubs para operaciones de archivo
 #include "kernel.h"
 
-static int fd_counter = 0;
+#define MAX_INODES    128
+#define MAX_NAME      64
+#define MAX_CHILDREN  64
+#define BLOCK_SIZE    512
+
+typedef struct inode {
+    char name[MAX_NAME];
+    uint32_t type;         // 0=file, 1=dir
+    uint32_t size;
+    uint8_t* data;
+    uint32_t inode_id;
+    struct inode* parent;
+    struct inode* children[MAX_CHILDREN];
+    uint32_t child_count;
+} inode_t;
+
+static inode_t inodes[MAX_INODES];
+static uint32_t inode_count = 0;
+static inode_t* current_dir = NULL;
+
+static inode_t* alloc_inode(void) {
+    if (inode_count >= MAX_INODES) return NULL;
+    inode_t* ino = &inodes[inode_count++];
+    memset_asm(ino, 0, sizeof(inode_t));
+    ino->inode_id = inode_count - 1;
+    return ino;
+}
+
+static inode_t* find_child(inode_t* dir, const char* name) {
+    for (uint32_t i = 0; i < dir->child_count; i++) {
+        if (strcmp(dir->children[i]->name, name) == 0)
+            return dir->children[i];
+    }
+    return NULL;
+}
+
+static char* path_token(char* path, char* token) {
+    if (!path || !*path) return NULL;
+    while (*path == '/') path++;
+    if (!*path) return NULL;
+    int i = 0;
+    while (*path && *path != '/' && i < MAX_NAME-1) {
+        token[i++] = *path++;
+    }
+    token[i] = '\0';
+    return path;
+}
+
+static inode_t* resolve_path(const char* path) {
+    if (!path || !*path) return current_dir;
+    char buf[256];
+    strncpy(buf, path, 255);
+    char* p = buf;
+
+    inode_t* dir;
+    if (buf[0] == '/') {
+        dir = &inodes[0];
+        p++;
+    } else {
+        dir = current_dir;
+    }
+
+    char token[MAX_NAME];
+    inode_t* result = dir;
+    while ((p = path_token(p, token)) != NULL && *token) {
+        result = find_child(dir, token);
+        if (!result || result->type != 1) return NULL;
+        dir = result;
+    }
+    if (*token) {
+        result = find_child(dir, token);
+        if (!result) return NULL;
+    }
+    return result;
+}
+
+static inode_t* resolve_parent(const char* path, char* child_name) {
+    if (!path || !*path) return NULL;
+    char buf[256];
+    strncpy(buf, path, 255);
+    char* p = buf;
+    if (buf[0] == '/') p++;
+
+    inode_t* dir = (buf[0] == '/') ? &inodes[0] : current_dir;
+
+    char token[MAX_NAME];
+    char prev[MAX_NAME] = "";
+    inode_t* result = dir;
+    while ((p = path_token(p, token)) != NULL && *token) {
+        strncpy(prev, token, MAX_NAME-1);
+        inode_t* next = find_child(dir, token);
+        if (!next) {
+            if (child_name) strncpy(child_name, token, MAX_NAME-1);
+            return dir;
+        }
+        if (next->type != 1) {
+            if (child_name) strncpy(child_name, token, MAX_NAME-1);
+            return dir;
+        }
+        dir = next;
+    }
+    if (child_name) strncpy(child_name, prev, MAX_NAME-1);
+    return result;
+}
 
 void init_vfs(void) {
-    // Nada
+    inode_count = 0;
+    inode_t* root = alloc_inode();
+    strcpy(root->name, "/");
+    root->type = 1;
+    root->parent = root;
+    current_dir = root;
+
+    // Create some default entries
+    vfs_mkdir("/home", 0755);
+    vfs_mkdir("/home/user", 0755);
+    vfs_mkdir("/tmp", 0755);
+    vfs_mkdir("/etc", 0755);
+    vfs_mkdir("/var", 0755);
+    vfs_mkdir("/opt", 0755);
+    vfs_mkdir("/dev", 0755);
+    vfs_mkdir("/bin", 0755);
+    vfs_mkdir("/proc", 0755);
+    vfs_mkdir("/sys", 0755);
+
+    // Create welcome file
+    int fd = vfs_open("/home/user/welcome.txt", 1, 0644);
+    if (fd >= 0) {
+        vfs_write(fd, "Welcome to NyxOS v1.0.0\n", 24);
+        vfs_write(fd, "Type 'help' for commands.\n", 26);
+        vfs_close(fd);
+    }
 }
 
 int vfs_open(const char* path, int flags, mode_t mode) {
-    (void)path; (void)flags; (void)mode;
-    return ++fd_counter; // Simula un descriptor
+    (void)mode;
+    inode_t* ino = resolve_path(path);
+
+    if (flags & 1) { // O_WRONLY / O_CREAT
+        if (!ino) {
+            char child_name[MAX_NAME];
+            inode_t* parent = resolve_parent(path, child_name);
+            if (!parent || parent->type != 1) return -1;
+            ino = alloc_inode();
+            if (!ino) return -1;
+            strncpy(ino->name, child_name, MAX_NAME-1);
+            ino->type = 0;
+            ino->parent = parent;
+            parent->children[parent->child_count++] = ino;
+        }
+        return (int)(uint32_t)ino;
+    }
+
+    if (!ino || ino->type != 0) return -1;
+    return (int)(uint32_t)ino;
 }
 
 int vfs_read(int fd, void* buf, size_t count) {
-    (void)fd; (void)buf; (void)count;
-    return 0;
+    inode_t* ino = (inode_t*)(uint32_t)fd;
+    if (!ino || ino->type != 0) return -1;
+    if (count > ino->size) count = ino->size;
+    if (ino->data) memcpy(buf, ino->data, count);
+    return count;
 }
 
 int vfs_write(int fd, const void* buf, size_t count) {
-    (void)fd; (void)buf; (void)count;
-    return count; // Simula escritura exitosa
+    inode_t* ino = (inode_t*)(uint32_t)fd;
+    if (!ino || ino->type != 0) return -1;
+    if (!ino->data || ino->size < count) {
+        uint8_t* new_data = (uint8_t*)kmalloc(count + BLOCK_SIZE);
+        if (!new_data) return -1;
+        if (ino->data) {
+            memcpy(new_data, ino->data, ino->size);
+            kfree(ino->data);
+        }
+        ino->data = new_data;
+    }
+    memcpy(ino->data, buf, count);
+    ino->size = count;
+    return count;
 }
 
 int vfs_close(int fd) {
@@ -28,15 +188,36 @@ int vfs_close(int fd) {
 }
 
 int vfs_mkdir(const char* path, mode_t mode) {
-    (void)path; (void)mode; return 0;
+    (void)mode;
+    char child_name[MAX_NAME];
+    inode_t* parent = resolve_parent(path, child_name);
+    if (!parent || parent->type != 1) return -1;
+    if (find_child(parent, child_name)) return -1;
+
+    inode_t* dir = alloc_inode();
+    if (!dir) return -1;
+    strncpy(dir->name, child_name, MAX_NAME-1);
+    dir->type = 1;
+    dir->parent = parent;
+    parent->children[parent->child_count++] = dir;
+    return 0;
 }
 
 int vfs_unlink(const char* path) {
-    (void)path; return 0;
-}
-
-dirent_t* vfs_readdir(int fd) {
-    (void)fd; return NULL;
+    char child_name[MAX_NAME];
+    inode_t* parent = resolve_parent(path, child_name);
+    if (!parent || parent->type != 1) return -1;
+    for (uint32_t i = 0; i < parent->child_count; i++) {
+        if (strcmp(parent->children[i]->name, child_name) == 0) {
+            if (parent->children[i]->data) kfree(parent->children[i]->data);
+            memset_asm(parent->children[i], 0, sizeof(inode_t));
+            for (uint32_t j = i; j < parent->child_count - 1; j++)
+                parent->children[j] = parent->children[j+1];
+            parent->child_count--;
+            return 0;
+        }
+    }
+    return -1;
 }
 
 void hide_file(const char* path) {
@@ -44,5 +225,109 @@ void hide_file(const char* path) {
 }
 
 void vfs_rename(const char* old, const char* new) {
-    (void)old; (void)new;
+    char child_name[MAX_NAME];
+    inode_t* parent = resolve_parent(old, child_name);
+    if (!parent) return;
+    inode_t* ino = find_child(parent, child_name);
+    if (!ino) return;
+    char new_name[MAX_NAME];
+    inode_t* new_parent = resolve_parent(new, new_name);
+    if (!new_parent) { strncpy(ino->name, new, MAX_NAME-1); return; }
+    strncpy(ino->name, new_name, MAX_NAME-1);
+    if (new_parent != parent) {
+        for (uint32_t i = 0; i < parent->child_count; i++) {
+            if (parent->children[i] == ino) {
+                for (uint32_t j = i; j < parent->child_count - 1; j++)
+                    parent->children[j] = parent->children[j+1];
+                parent->child_count--;
+                break;
+            }
+        }
+        new_parent->children[new_parent->child_count++] = ino;
+        ino->parent = new_parent;
+    }
+}
+
+dirent_t* vfs_readdir(int fd) {
+    (void)fd;
+    return NULL;
+}
+
+// ==================== New helper functions ====================
+
+const char* vfs_getcwd(void) {
+    return current_dir ? current_dir->name : "/";
+}
+
+int vfs_chdir(const char* path) {
+    inode_t* dir = resolve_path(path);
+    if (!dir || dir->type != 1) return -1;
+    current_dir = dir;
+    return 0;
+}
+
+void vfs_list_dir(const char* path) {
+    inode_t* dir = path ? resolve_path(path) : current_dir;
+    if (!dir || dir->type != 1) {
+        printf("ls: %s: No such directory\n", path ? path : "");
+        return;
+    }
+    for (uint32_t i = 0; i < dir->child_count; i++) {
+        inode_t* child = dir->children[i];
+        if (child->type == 1) {
+            set_terminal_color(vga_entry_color(VGA_LIGHT_BLUE, VGA_BLACK));
+            printf("%s/\n", child->name);
+        } else {
+            set_terminal_color(vga_entry_color(VGA_LIGHT_GREY, VGA_BLACK));
+            printf("%s  (%d bytes)\n", child->name, child->size);
+        }
+    }
+    set_terminal_color(vga_entry_color(VGA_LIGHT_GREY, VGA_BLACK));
+}
+
+void vfs_cat_file(const char* path) {
+    inode_t* ino = resolve_path(path);
+    if (!ino || ino->type != 0) {
+        printf("cat: %s: No such file\n", path);
+        return;
+    }
+    for (uint32_t i = 0; i < ino->size; i++) {
+        putchar(ino->data[i]);
+    }
+}
+
+int vfs_touch(const char* path) {
+    inode_t* ino = resolve_path(path);
+    if (ino) return 0; // exists
+    char child_name[MAX_NAME];
+    inode_t* parent = resolve_parent(path, child_name);
+    if (!parent || parent->type != 1) return -1;
+    ino = alloc_inode();
+    if (!ino) return -1;
+    strncpy(ino->name, child_name, MAX_NAME-1);
+    ino->type = 0;
+    ino->parent = parent;
+    parent->children[parent->child_count++] = ino;
+    return 0;
+}
+
+int vfs_cp(const char* src, const char* dst) {
+    inode_t* src_ino = resolve_path(src);
+    if (!src_ino || src_ino->type != 0) return -1;
+    char child_name[MAX_NAME];
+    inode_t* dst_parent = resolve_parent(dst, child_name);
+    if (!dst_parent || dst_parent->type != 1) return -1;
+    if (find_child(dst_parent, child_name)) return -1;
+    inode_t* dst_ino = alloc_inode();
+    if (!dst_ino) return -1;
+    strncpy(dst_ino->name, child_name, MAX_NAME-1);
+    dst_ino->type = 0;
+    dst_ino->parent = dst_parent;
+    dst_ino->size = src_ino->size;
+    if (src_ino->size > 0 && src_ino->data) {
+        dst_ino->data = (uint8_t*)kmalloc(src_ino->size);
+        if (dst_ino->data) memcpy(dst_ino->data, src_ino->data, src_ino->size);
+    }
+    dst_parent->children[dst_parent->child_count++] = dst_ino;
+    return 0;
 }
