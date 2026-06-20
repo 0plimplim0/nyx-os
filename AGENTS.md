@@ -84,11 +84,20 @@ modules/
 | cat/touch/mkdir/rm/cp/mv | File operations |
 | which      | Find command location |
 | head       | Show first N lines of file |
+| tail       | Show last N lines of file |
+| grep       | Search file contents |
+| sort       | Sort lines of a file |
+| wc         | Count lines/words/chars |
 | tree       | Recursive directory listing |
+| find       | Find files by name |
+| write      | Write text to file |
+| env/export | Environment variables |
+| history    | Command history |
 | ps/kill    | Process management |
 | mem        | Memory usage |
 | modules    | List kernel modules |
 | ifconfig   | Network interface status |
+| dhcp       | Request IP via DHCP |
 | ping       | ICMP ping |
 | layout     | Switch keyboard layout (us/es) |
 | hexdump    | Dump memory |
@@ -97,22 +106,26 @@ modules/
 | scan/hash/exploit/brute/memscan/shellcode | Offensive tooling |
 | keylog/backdoor/bdshell | Stealth features |
 
+## Shell features
+- Tab completion for command names
+- Environment variable expansion: `echo $VARNAME`
+- Command history (last 10, duplicates filtered)
+- `echo > file` redirection support
+
 ## Network stack
 - RTL8139: PCI, I/O BAR, MMIO, TX/RX rings, link detection
 - ARP: Cache, request/reply, periodic cleanup
 - IP: Send/receive with checksum, local delivery
 - UDP: Send raw UDP datagrams
 - ICMP: Echo request/reply for ping
-- Single static IP: 10.0.2.15/24 (QEMU user-mode default)
+- **DHCP**: Full client (DISCOVER -> OFFER -> REQUEST -> ACK), auto-configures IP/netmask/gateway
+- Single static IP: 10.0.2.15/24 (QEMU user-mode default) or DHCP-assigned
 
 ## Next features to add
 - Interrupt-driven timer/keyboard (enable `sti`, unmask PIC IRQs)
 - Preemptive multitasking with proper context switching
-- `write` command (full file writing)
-- `grep`, `sort`, `find`, `head`, `tail`, `diff`
-- Pipe `|` and redirect `>` in shell parser
-- Environment variables
+- diff command (compare two files)
+- Pipe `|` support in shell parser
 - Real EXT2 read support
 - TCP (connections, handshake)
-- DHCP client
 - VGA graphics mode / DOOM renderer
