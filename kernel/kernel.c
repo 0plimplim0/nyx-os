@@ -764,9 +764,11 @@ void kernel_panic(const char* msg, ...) {
 // ============================================================
 // kernel_main
 // ============================================================
+static void* saved_mboot_ptr = NULL;
+
 void kernel_main(uint32_t magic, void* mboot_ptr) {
     (void)magic;
-    (void)mboot_ptr;
+    saved_mboot_ptr = mboot_ptr;
     init_screen();
     clear_screen();
 
@@ -804,6 +806,7 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
     printf("[INIT] Creating idle process...\n"); ensure_idle_process();
     printf("[INIT] System Calls...\n"); init_syscalls();
     printf("[INIT] Virtual File System...\n"); init_vfs();
+    printf("[INIT] Loading GRUB modules...\n"); init_load_modules();
     printf("[INIT] EXT2 Filesystem...\n"); init_ext2();
     printf("[INIT] Network Stack...\n"); init_net();
     init_background_tasks();
@@ -1181,6 +1184,40 @@ char *strstr(const char *haystack, const char *needle) {
         haystack++;
     }
     return NULL;
+}
+
+void init_load_modules(void) {
+    if (!saved_mboot_ptr) {
+        printf("[MODULES] No multiboot info available.\n");
+        return;
+    }
+    uint32_t* mb = (uint32_t*)saved_mboot_ptr;
+    if (!(mb[0] & 8)) {
+        printf("[MODULES] No modules present in multiboot info.\n");
+        return;
+    }
+    uint32_t mods_count = mb[5];
+    uint32_t mods_addr = mb[6];
+    printf("[MODULES] %d module(s) at %x\n", mods_count, mods_addr);
+    uint32_t* mod_entry = (uint32_t*)mods_addr;
+    for (uint32_t i = 0; i < mods_count; i++) {
+        uint32_t mod_start = mod_entry[0];
+        uint32_t mod_end = mod_entry[1];
+        uint32_t mod_str = mod_entry[2];
+        uint32_t mod_size = mod_end - mod_start;
+        const char* name = (const char*)mod_str;
+        printf("[MODULES] Module %d: start=%x end=%x size=%d name=%s\n",
+               i, mod_start, mod_end, mod_size, name ? name : "(null)");
+        char path[64];
+        if (name && *name) {
+            snprintf(path, sizeof(path), "/boot/%s", name);
+        } else {
+            snprintf(path, sizeof(path), "/boot/module%d", i);
+        }
+        int ret = vfs_create_from_mem(path, (uint8_t*)(uint32_t)mod_start, mod_size);
+        printf("[MODULES] Loaded '%s' (%d bytes) into VFS via mem ref: ret=%d\n", path, mod_size, ret);
+        mod_entry += 4;
+    }
 }
 
 char* strcasestr(const char *haystack, const char *needle) {

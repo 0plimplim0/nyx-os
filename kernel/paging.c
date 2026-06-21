@@ -1,7 +1,6 @@
-// ============================================================
-// paging.c - Gestor de paginación (sin far jump)
-// ============================================================
 #include "kernel.h"
+
+#define IDENTITY_MAP_MB 32
 
 static uint32_t* current_page_directory = NULL;
 static uint32_t* kernel_page_directory = NULL;
@@ -13,13 +12,16 @@ void init_paging(void) {
     memset_asm(kernel_page_directory, 0, PAGE_SIZE);
     printf("[PAGING] Page directory at %x\n", kernel_page_directory);
 
-    printf("[PAGING] Allocating page table (identity map 0-4MB)...\n");
-    uint32_t* page_table = (uint32_t*)alloc_page();
-    if (!page_table) kernel_panic("No page table");
-    for (uint32_t i = 0; i < 1024; i++) {
-        page_table[i] = (i * PAGE_SIZE) | 3;
+    int num_tables = IDENTITY_MAP_MB / 4;
+    printf("[PAGING] Identity-mapping %d MB (%d page tables)...\n", IDENTITY_MAP_MB, num_tables);
+    for (int t = 0; t < num_tables; t++) {
+        uint32_t* pt = (uint32_t*)alloc_page();
+        if (!pt) kernel_panic("No page table");
+        for (uint32_t i = 0; i < 1024; i++) {
+            pt[i] = ((t * 0x400000) + (i * PAGE_SIZE)) | 3;
+        }
+        kernel_page_directory[t] = (uint32_t)pt | 3;
     }
-    kernel_page_directory[0] = (uint32_t)page_table | 3;
 
     printf("[PAGING] Loading CR3 with %x\n", kernel_page_directory);
     write_cr3((uint32_t)kernel_page_directory);
@@ -30,7 +32,6 @@ void init_paging(void) {
     cr0 |= 0x80000000;
     __asm__ volatile("mov %0, %%cr0" :: "r"(cr0));
 
-    // Forzar un salto corto para vaciar la cola de prebúsqueda
     __asm__ volatile("jmp 1f\n1:");
 
     current_page_directory = kernel_page_directory;
@@ -47,8 +48,29 @@ void* get_phys_addr(void* virtual_addr) {
     return (void*)((pt[pt_index] & ~0xFFF) + offset);
 }
 
-void map_page(void* phys, void* virt, uint32_t flags) { (void)phys; (void)virt; (void)flags; }
-void unmap_page(void* virt) { (void)virt; }
+void map_page(void* phys, void* virt, uint32_t flags) {
+    (void)phys; (void)virt; (void)flags;
+    uint32_t pd_idx = (uint32_t)virt >> 22;
+    uint32_t pt_idx = ((uint32_t)virt >> 12) & 0x3FF;
+    if (!(kernel_page_directory[pd_idx] & 1)) {
+        uint32_t* pt = (uint32_t*)alloc_page();
+        if (!pt) return;
+        memset_asm(pt, 0, PAGE_SIZE);
+        kernel_page_directory[pd_idx] = (uint32_t)pt | 3;
+    }
+    uint32_t* pt = (uint32_t*)(kernel_page_directory[pd_idx] & ~0xFFF);
+    pt[pt_idx] = ((uint32_t)phys & ~0xFFF) | (flags & 0xFFF) | 1;
+    __asm__ volatile("invlpg (%0)" :: "r"(virt));
+}
+
+void unmap_page(void* virt) {
+    uint32_t pd_idx = (uint32_t)virt >> 22;
+    uint32_t pt_idx = ((uint32_t)virt >> 12) & 0x3FF;
+    if (!(kernel_page_directory[pd_idx] & 1)) return;
+    uint32_t* pt = (uint32_t*)(kernel_page_directory[pd_idx] & ~0xFFF);
+    pt[pt_idx] = 0;
+    __asm__ volatile("invlpg (%0)" :: "r"(virt));
+}
 
 void* clone_page_directory(void) {
     return NULL;

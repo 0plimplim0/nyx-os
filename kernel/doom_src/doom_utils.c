@@ -1,15 +1,56 @@
-// ============================================================
-// doom_utils.c - Implementaciones de funciones estándar para DOOM
-// ============================================================
 #include "fake_stdlib.h"
 #include "kernel.h"
 
-FILE *stderr = NULL;
-FILE *stdout = NULL;
-FILE *stdin = NULL;
+#define MAX_OPEN_FILES 16
+
+typedef struct {
+    uint8_t* data;
+    uint32_t size;
+    uint32_t pos;
+    int fd;
+    int in_use;
+} nyx_cookie_t;
+
+static nyx_cookie_t cookies[MAX_OPEN_FILES];
+
+#define FILE_MAGIC 0x4E59
+typedef struct {
+    int magic;
+    int index;
+} nyx_file_hdr;
+
+static nyx_file_hdr null_file = { FILE_MAGIC, -1 };
+static nyx_file_hdr out_file = { FILE_MAGIC, -2 };
+static nyx_file_hdr err_file = { FILE_MAGIC, -3 };
+
+FILE *stdin = (FILE*)&null_file;
+FILE *stdout = (FILE*)&out_file;
+FILE *stderr = (FILE*)&err_file;
+
 int errno = 0;
 
-// Funciones de memoria
+static nyx_cookie_t* get_cookie(FILE* f) {
+    nyx_file_hdr* hdr = (nyx_file_hdr*)f;
+    if (!f || hdr->magic != FILE_MAGIC) return NULL;
+    if (hdr->index < 0 || hdr->index >= MAX_OPEN_FILES) return NULL;
+    if (!cookies[hdr->index].in_use) return NULL;
+    return &cookies[hdr->index];
+}
+
+static int alloc_cookie(void) {
+    for (int i = 0; i < MAX_OPEN_FILES; i++) {
+        if (!cookies[i].in_use) {
+            cookies[i].in_use = 1;
+            cookies[i].data = NULL;
+            cookies[i].size = 0;
+            cookies[i].pos = 0;
+            cookies[i].fd = -1;
+            return i;
+        }
+    }
+    return -1;
+}
+
 void *memcpy(void *dest, const void *src, size_t n) {
     memcpy_asm(dest, src, n);
     return dest;
@@ -33,7 +74,6 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
-// Funciones de cadena
 size_t strlen(const char *s) {
     size_t len = 0;
     while (*s++) len++;
@@ -82,8 +122,6 @@ char *strrchr(const char *s, int c) {
     return (char*)last;
 }
 
-
-
 char *strpbrk(const char *s, const char *accept) {
     while (*s) {
         const char *a = accept;
@@ -131,9 +169,9 @@ char *strtok(char *str, const char *delim) {
 
 char *strdup(const char *s) {
     size_t len = strlen(s) + 1;
-    char *new = malloc(len);
-    if (new) strcpy(new, s);
-    return new;
+    char *nv = malloc(len);
+    if (nv) strcpy(nv, s);
+    return nv;
 }
 
 int strcasecmp(const char *s1, const char *s2) {
@@ -147,9 +185,8 @@ int strncasecmp(const char *s1, const char *s2, size_t n) {
     return (*(unsigned char *)s1|0x20) - (*(unsigned char *)s2|0x20);
 }
 
-// stdlib
-void *malloc(size_t size) { (void)size; return NULL; }
-void free(void *ptr) { (void)ptr; }
+void *malloc(size_t size) { return kmalloc(size); }
+void free(void *ptr) { kfree(ptr); }
 void abort(void) { while(1); }
 int abs(int j) { return j < 0 ? -j : j; }
 long int labs(long int j) { return j < 0 ? -j : j; }
@@ -170,8 +207,7 @@ long int strtol(const char *s, char **end, int base) {
     if (*s == '-') { sign = -1; s++; }
     else if (*s == '+') s++;
     if ((base == 0 || base == 16) && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-        base = 16;
+        s += 2; base = 16;
     }
     if (base == 0) base = 10;
     while (*s) {
@@ -190,21 +226,90 @@ long int strtol(const char *s, char **end, int base) {
 
 void exit(int status) { (void)status; while(1); }
 
-// stdio
-FILE *fopen(const char *path, const char *mode) { (void)path; (void)mode; return NULL; }
-int fclose(FILE *stream) { (void)stream; return 0; }
-size_t fread(void *ptr, size_t size, size_t count, FILE *stream) { (void)ptr; (void)size; (void)count; (void)stream; return 0; }
-size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream) { (void)ptr; (void)size; (void)count; (void)stream; return count; }
-int fseek(FILE *stream, long offset, int whence) { (void)stream; (void)offset; (void)whence; return 0; }
-long ftell(FILE *stream) { (void)stream; return 0; }
-int feof(FILE *stream) { (void)stream; return 1; }
+FILE *fopen(const char *path, const char *mode) {
+    (void)mode;
+    int idx = alloc_cookie();
+    if (idx < 0) return NULL;
+    int fd = vfs_open(path, 0, 0);
+    if (fd < 0 && path[0] != '/') {
+        char altpath[128];
+        int w = snprintf(altpath, sizeof(altpath), "/boot/%s", path);
+        if (w > 0 && w < (int)sizeof(altpath)) fd = vfs_open(altpath, 0, 0);
+        if (fd < 0) {
+            w = snprintf(altpath, sizeof(altpath), "/%s", path);
+            if (w > 0 && w < (int)sizeof(altpath)) fd = vfs_open(altpath, 0, 0);
+        }
+    }
+    if (fd < 0) { cookies[idx].in_use = 0; return NULL; }
+    cookies[idx].data = vfs_fdata(fd);
+    cookies[idx].size = vfs_fsize(fd);
+    cookies[idx].pos = 0;
+    cookies[idx].fd = fd;
+    nyx_file_hdr* hdr = (nyx_file_hdr*)kmalloc(sizeof(nyx_file_hdr));
+    if (!hdr) { vfs_close(fd); cookies[idx].in_use = 0; return NULL; }
+    hdr->magic = FILE_MAGIC;
+    hdr->index = idx;
+    return (FILE*)hdr;
+}
+
+int fclose(FILE *stream) {
+    nyx_cookie_t* c = get_cookie(stream);
+    if (!c) return EOF;
+    if (c->fd >= 0) vfs_close(c->fd);
+    c->in_use = 0;
+    kfree(stream);
+    return 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t count, FILE *stream) {
+    nyx_cookie_t* c = get_cookie(stream);
+    if (!c) return 0;
+    size_t total = size * count;
+    if (c->pos >= c->size) return 0;
+    if (c->pos + total > c->size) total = c->size - c->pos;
+    if (total == 0) return 0;
+    memcpy(ptr, c->data + c->pos, total);
+    c->pos += total;
+    return total / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t count, FILE *stream) {
+    (void)ptr; (void)size; (void)count; (void)stream;
+    return count;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    nyx_cookie_t* c = get_cookie(stream);
+    if (!c) return -1;
+    switch (whence) {
+        case SEEK_SET: c->pos = (uint32_t)offset; break;
+        case SEEK_CUR: c->pos += (uint32_t)offset; break;
+        case SEEK_END: c->pos = c->size + (uint32_t)offset; break;
+    }
+    if (c->pos > c->size) c->pos = c->size;
+    return 0;
+}
+
+long ftell(FILE *stream) {
+    nyx_cookie_t* c = get_cookie(stream);
+    if (!c) return -1;
+    return (long)c->pos;
+}
+
+int feof(FILE *stream) {
+    nyx_cookie_t* c = get_cookie(stream);
+    if (!c) return 1;
+    return c->pos >= c->size;
+}
+
 int ferror(FILE *stream) { (void)stream; return 0; }
 
 char *strncat(char *dest, const char *src, size_t n) {
     char *orig = dest;
     while (*dest) dest++;
-    for (size_t i = 0; i < n && src[i]; i++) dest[i] = src[i];
-    dest[n] = '\0';
+    size_t i;
+    for (i = 0; i < n && src[i]; i++) dest[i] = src[i];
+    dest[i] = '\0';
     return orig;
 }
 
@@ -213,14 +318,10 @@ int sscanf(const char *str, const char *format, ...) {
     return 0;
 }
 
-// Faltantes: redirigir a kernel
-
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
     (void)buf; (void)size; (void)fmt; (void)args;
     return 0;
 }
-
-
 
 void *calloc(size_t nmemb, size_t size) {
     size_t total = nmemb * size;
@@ -230,16 +331,17 @@ void *calloc(size_t nmemb, size_t size) {
 }
 
 void *realloc(void *ptr, size_t size) {
-    (void)ptr;
-    return malloc(size);
+    if (!ptr) return malloc(size);
+    void *nv = kmalloc(size);
+    if (nv) memcpy(nv, ptr, size);
+    kfree(ptr);
+    return nv;
 }
 
 int fflush(FILE *stream) {
     (void)stream;
     return 0;
 }
-
-
 
 int remove(const char *pathname) {
     (void)pathname;
@@ -276,19 +378,14 @@ double atof(const char *s) {
 }
 
 int mkdir(const char *pathname) {
-    (void)pathname;
-    return -1;
+    return vfs_mkdir(pathname, 0755);
 }
 
-
-
-// Matemáticas
 double sin(double x) {
     double result = 0;
     double term = x;
     int sign = 1;
-    int n;
-    for (n = 1; n <= 15; n += 2) {
+    for (int n = 1; n <= 15; n += 2) {
         result += sign * term;
         sign = -sign;
         term = term * x * x / ((n+1)*(n+2));
@@ -300,8 +397,7 @@ double cos(double x) {
     double result = 1;
     double term = 1;
     int sign = -1;
-    int n;
-    for (n = 2; n <= 14; n += 2) {
+    for (int n = 2; n <= 14; n += 2) {
         term = term * x * x / ((n-1)*n);
         result += sign * term;
         sign = -sign;

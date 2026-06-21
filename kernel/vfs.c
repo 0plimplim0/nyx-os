@@ -187,6 +187,33 @@ int vfs_close(int fd) {
     return 0;
 }
 
+int vfs_create_from_mem(const char* path, uint8_t* data, uint32_t size) {
+    char child_name[MAX_NAME];
+    vfs_node_t* parent = resolve_parent((char*)path, child_name);
+    if (!parent || parent->type != 1) return -1;
+    vfs_node_t* ino = alloc_node();
+    if (!ino) return -1;
+    strncpy(ino->name, child_name, MAX_NAME-1);
+    ino->type = 0;
+    ino->size = size;
+    ino->data = data;
+    ino->parent = parent;
+    parent->children[parent->child_count++] = ino;
+    return (int)(uint32_t)ino;
+}
+
+uint32_t vfs_fsize(int fd) {
+    vfs_node_t* ino = (vfs_node_t*)(uint32_t)fd;
+    if (!ino || ino->type != 0) return 0;
+    return ino->size;
+}
+
+uint8_t* vfs_fdata(int fd) {
+    vfs_node_t* ino = (vfs_node_t*)(uint32_t)fd;
+    if (!ino || ino->type != 0) return NULL;
+    return ino->data;
+}
+
 int vfs_mkdir(const char* path, mode_t mode) {
     (void)mode;
     char child_name[MAX_NAME];

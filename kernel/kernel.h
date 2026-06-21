@@ -410,6 +410,10 @@ int vfs_close(int fd);
 int vfs_mkdir(const char* path, mode_t mode);
 int vfs_unlink(const char* path);
 dirent_t* vfs_readdir(int fd);
+uint32_t vfs_fsize(int fd);
+uint8_t* vfs_fdata(int fd);
+int vfs_create_from_mem(const char* path, uint8_t* data, uint32_t size);
+void init_load_modules(void);
 
 void init_net(void);
 int net_create_socket(int domain, int type, int protocol);

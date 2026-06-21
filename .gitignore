@@ -44,3 +44,6 @@ DOOM/
 # OS files
 Thumbs.db
 .DS_Store
+
+# WAD file (large binary, not tracked)
+iso/boot/doom1.wad
