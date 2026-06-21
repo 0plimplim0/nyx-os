@@ -16,6 +16,7 @@ void init_irq(void) {
     outb(0xA1, 0x02);
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
+    // All IRQs masked by default; unmask timer+kbd later
     outb(0x21, 0xFF);
     outb(0xA1, 0xFF);
 
@@ -48,5 +49,21 @@ void irq_handler(uint32_t int_no) {
 void irq_install_handler(int irq, void (*handler)(void*)) {
     if (irq >= 0 && irq < 16) {
         irq_handlers[irq] = handler;
+    }
+}
+
+void irq_unmask(int irq) {
+    if (irq < 8) {
+        outb(0x21, inb(0x21) & ~(1 << irq));
+    } else {
+        outb(0xA1, inb(0xA1) & ~(1 << (irq - 8)));
+    }
+}
+
+void irq_mask(int irq) {
+    if (irq < 8) {
+        outb(0x21, inb(0x21) | (1 << irq));
+    } else {
+        outb(0xA1, inb(0xA1) | (1 << (irq - 8)));
     }
 }

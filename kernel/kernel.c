@@ -752,8 +752,8 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
 
     printf("[INIT] Paging...\n"); init_paging();
     printf("[INIT] Kernel Heap...\n"); init_heap();
-    printf("[INIT] Timer (1000 Hz, polling)...\n"); init_timer(1000);
-    printf("[INIT] Keyboard (polling)...\n"); 
+    printf("[INIT] Timer (1000 Hz, interrupt-driven)...\n"); init_timer(1000);
+    printf("[INIT] Keyboard (interrupt-driven)...\n"); 
     init_keyboard();
     set_keyboard_layout(1);
     printf("[INIT] Process Manager...\n"); init_process();
@@ -763,7 +763,13 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
     printf("[INIT] Network Stack...\n"); init_net();
     init_background_tasks();
 
-    printf("[INIT] Interrupts disabled (safe mode)\n");
+    printf("[INIT] Registering IRQ handlers...\n");
+    irq_install_handler(1, keyboard_irq_handler);
+    printf("[INIT] Unmasking IRQ0 (timer) and IRQ1 (keyboard)...\n");
+    irq_unmask(0);
+    irq_unmask(1);
+    printf("[INIT] Enabling interrupts (sti)...\n");
+    enable_interrupts();
     kernel_initialized = true;
     printf("\n[READY] NyxOS initialized successfully.\n\n");
     // Quick serial handshake for testing

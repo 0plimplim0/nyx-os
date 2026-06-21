@@ -1,5 +1,5 @@
 // ============================================================
-// keyboard.c - Controlador de teclado PS/2 con Set 2 directo
+// keyboard.c - Controlador de teclado PS/2 (interrupt-driven)
 // ============================================================
 #include "kernel.h"
 
@@ -10,6 +10,14 @@ static int shift_pressed = 0;
 static int altgr_pressed = 0;      // Alt derecho (AltGr)
 static int caps_lock = 0;
 static int e0_prefix = 0;          // Flag para el prefijo 0xE0
+
+// ------------------------------------------------------------
+// Buffer circular para caracteres (ISR -> getchar)
+// ------------------------------------------------------------
+#define KBD_BUFFER_SIZE 256
+static volatile char kbd_buffer[KBD_BUFFER_SIZE];
+static volatile int kbd_head = 0;
+static volatile int kbd_tail = 0;
 
 // ------------------------------------------------------------
 // Variable global de layout (definida aquí)
@@ -164,12 +172,31 @@ char scancode_to_ascii(uint8_t sc) {
 }
 
 // ============================================================
+// Manejador de interrupción del teclado (IRQ1)
+// ============================================================
+void keyboard_irq_handler(void* unused) {
+    (void)unused;
+    if (inb(0x64) & 0x01) {
+        uint8_t sc = inb(0x60);
+        char c = scancode_to_ascii(sc);
+        if (c) {
+            int next = (kbd_head + 1) % KBD_BUFFER_SIZE;
+            if (next != kbd_tail) {
+                kbd_buffer[kbd_head] = c;
+                kbd_head = next;
+            }
+        }
+    }
+}
+
+// ============================================================
 // Funciones de lectura
 // ============================================================
 char getchar_poll(void) {
-    if ((inb(0x64) & 0x01) == 0) return 0;
-    uint8_t sc = inb(0x60);
-    return scancode_to_ascii(sc);
+    if (kbd_tail == kbd_head) return 0;
+    char c = kbd_buffer[kbd_tail];
+    kbd_tail = (kbd_tail + 1) % KBD_BUFFER_SIZE;
+    return c;
 }
 
 char getchar(void) {
@@ -177,7 +204,7 @@ char getchar(void) {
     while (1) {
         c = getchar_poll();
         if (c) return c;
-        for (volatile int i = 0; i < 10000; i++);
+        __asm__ volatile("hlt");
     }
 }
 

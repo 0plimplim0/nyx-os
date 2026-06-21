@@ -34,7 +34,7 @@ Evolve NyxOS into a functional 32-bit x86 kernel with filesystem, networking, sh
 
 - `_kernel_end` symbol in `linker.ld` marks kernel BSS boundary for memory manager.
 - Serial (`init_serial()`) is a stub — only used via direct `outb(0x3F8, ...)`. VGA text mode (0xB8000) is primary console.
-- Interrupts are DISABLED (`cli`). Timer and keyboard are polled.
+- Interrupts are ENABLED (`sti`). Timer (IRQ0) and keyboard (IRQ1) are interrupt-driven with proper PIC unmasking and EOI.
 - Cooperative multitasking via `switch_context`/`create_task_stack` (assembly) + background task callbacks.
 
 ## Kernel structure
@@ -113,7 +113,6 @@ kernel/
 - Single static IP: 10.0.2.15/24 (QEMU user-mode default) or DHCP-assigned
 
 ## Next features to add
-- Interrupt-driven timer/keyboard (enable `sti`, unmask PIC IRQs)
 - Preemptive multitasking with proper context switching
 - diff command (compare two files)
 - Pipe `|` support in shell parser

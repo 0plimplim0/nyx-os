@@ -67,7 +67,6 @@ void unhide_process(uint32_t pid) {
 }
 
 void schedule(void) {
-    update_timer();
 }
 
 // Background task: blink on serial port

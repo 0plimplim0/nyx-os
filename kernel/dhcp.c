@@ -141,7 +141,6 @@ int dhcp_request(int iface_idx) {
             dhcp_state = 2;
         }
 
-        update_timer();
     }
 
     printf("[DHCP] Failed\n");

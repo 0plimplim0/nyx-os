@@ -362,6 +362,8 @@ void isr_handler(uint32_t int_no, uint32_t err_code);
 void init_irq(void);
 void irq_handler(uint32_t irq_no);
 void irq_install_handler(int irq, void (*handler)(void*));
+void irq_unmask(int irq);
+void irq_mask(int irq);
 
 void init_memory(uint32_t mem_size);
 void* kmalloc(size_t size);
@@ -422,13 +424,13 @@ int net_close(int sock);
 
 
 void init_timer(uint32_t frequency);
-void update_timer(void);
 uint32_t get_ticks(void);
 void sleep(uint32_t milliseconds);
 
 void init_keyboard(void);
 char getchar(void);
 char getchar_poll(void);
+void keyboard_irq_handler(void* unused);
 
 
 void init_screen(void);
