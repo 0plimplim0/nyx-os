@@ -342,7 +342,11 @@ Join the **NyxOS Discord** to follow development, ask questions, or contribute:
 
 ## License
 
-This project is provided for educational and research purposes only.
+This project is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License** as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version.
+
+The kernel links against doomgeneric (Chocolate Doom-derived), which is GPL-2.0+. All original kernel code is also distributed under GPL-2.0+.
+
+See the [LICENSE](LICENSE) file for the full license text.
 
 ---
 
