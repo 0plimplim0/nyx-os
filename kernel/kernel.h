@@ -471,6 +471,11 @@ const char* pipe_get_data(void);
 int pipe_get_len(void);
 
 void init_ext2(void);
+int  ata_init(void);
+int  ata_read_sectors(uint8_t drive, uint32_t lba, uint8_t count, void* buf);
+int  ext2_mount(uint8_t drive, uint32_t part_lba);
+int  ext2_ls(const char* path);
+int  ext2_cat(const char* path);
 
 // Network driver and polling
 void kernel_poll_net(void);

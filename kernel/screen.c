@@ -148,9 +148,10 @@ int vprintf(const char* fmt, va_list args) {
                     break;
                 }
                 case 'd':
-                case 'i': {
-                    int d = va_arg(args, int);
-                    itoa(d, buf, 10);
+                case 'i':
+                case 'u': {
+                    unsigned int u = va_arg(args, unsigned int);
+                    itoa((int)u, buf, 10);
                     char *p = buf;
                     while (*p) { putchar(*p++); count++; }
                     break;

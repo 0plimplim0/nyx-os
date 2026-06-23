@@ -20,7 +20,7 @@ ASFLAGS = -f elf32
 LDFLAGS = -T linker.ld -nostdlib -m elf_i386
 
 OBJS_KERNEL = boot.o kernel.o gdt.o gdt_flush.o idt.o idt_load.o isr.o isr_stubs.o irq.o \
-       memory.o heap.o process.o syscall.o vfs.o ext2.o net.o udp.o \
+       memory.o heap.o process.o syscall.o vfs.o ext2.o ata.o net.o udp.o \
        ip.o arp.o ethernet.o rtl8139.o icmp.o timer.o keyboard.o screen.o \
        serial.o umoddi3.o paging.o switch.o dhcp.o \
        vga_graphics.o doom_nyxos.o \

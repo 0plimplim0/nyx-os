@@ -6,6 +6,7 @@
 #include "speaker.h"
 #include "tcp.h"
 #include "sb16.h"
+#include "ext2.h"
 
 // Variables globales del kernel
 process_t* process_table[MAX_PROCESSES];
@@ -126,8 +127,9 @@ static void cmd_desktop(int argc, char** argv);
 static void cmd_beep(int argc, char** argv);
 static void cmd_play(int argc, char** argv);
 static void cmd_tcptest(int argc, char** argv);
-static void cmd_sb16test(int argc, char** argv);
 static void cmd_setip(int argc, char** argv);
+static void cmd_ext2ls(int argc, char** argv);
+static void cmd_ext2cat(int argc, char** argv);
 
 static const command_t commands[] = {
     {"help",      cmd_help,      "Show this help", false},
@@ -181,6 +183,8 @@ static const command_t commands[] = {
     {"play",      cmd_play,      "Play a demo melody", false},
     {"tcptest",   cmd_tcptest,   "Test TCP: tcptest <ip> <port>", false},
     {"setip",     cmd_setip,     "Set static IP: setip <ip> <mask> <gw>", false},
+    {"ext2ls",    cmd_ext2ls,    "List EXT2 directory: ext2ls <path>", false},
+    {"ext2cat",   cmd_ext2cat,   "Show EXT2 file: ext2cat <path>", false},
     {NULL, NULL, NULL, false}
 };
 
@@ -653,6 +657,33 @@ static void cmd_setip(int argc, char** argv) {
         }
     }
     printf("No interface found\n");
+}
+
+static void cmd_ext2ls(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: ext2ls <path>\n"); return; }
+    if (ext2_fs.sb.magic != EXT2_SUPER_MAGIC) {
+        if (ata_init() == 0 && ext2_mount(0, 0) == 0) {
+            printf("EXT2 mounted: %u blocks, %u inodes\n",
+                   ext2_fs.sb.total_blocks, ext2_fs.sb.total_inodes);
+        } else {
+            printf("EXT2 not available.\n");
+            return;
+        }
+    }
+    ext2_ls(argv[1]);
+}
+
+static void cmd_ext2cat(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: ext2cat <path>\n"); return; }
+    if (ext2_fs.sb.magic != EXT2_SUPER_MAGIC) {
+        if (ata_init() == 0 && ext2_mount(0, 0) == 0) {
+            printf("EXT2 mounted\n");
+        } else {
+            printf("EXT2 not available.\n");
+            return;
+        }
+    }
+    ext2_cat(argv[1]);
 }
 
 static void cmd_tcptest(int argc, char** argv) {
