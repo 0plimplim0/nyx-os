@@ -565,10 +565,6 @@ uint32_t font_get_height(void);
 // ===== GUI DEMO =====
 void gui_demo(void);
 
-// ===== COMPOSITOR =====
-int compositor_init(void);
-void compositor_run(void);
-
 // ===== SPEAKER =====
 void speaker_init(void);
 void speaker_on(uint32_t frequency);

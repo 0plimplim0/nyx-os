@@ -592,9 +592,9 @@ static void cmd_desktop(int argc, char** argv) {
     printf("Launching window compositor...\n");
     printf("Esc to exit\n");
     compositor_init();
-    window_create(40, 40, 300, 200, "Window 1");
-    window_create(80, 80, 300, 200, "Window 2");
-    window_create(120, 120, 300, 200, "Window 3");
+    window_create(40, 40, 300, 200, "Window 1", NULL);
+    window_create(80, 80, 300, 200, "Window 2", NULL);
+    window_create(120, 120, 300, 200, "Window 3", NULL);
     compositor_run();
 }
 
