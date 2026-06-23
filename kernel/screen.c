@@ -18,6 +18,13 @@ static char pipe_buffer[4096];
 static int pipe_pos = 0;
 static int pipe_active = 0;
 
+// Terminal capture hook
+static void (*putchar_hook)(char c) = NULL;
+
+void set_putchar_hook(void (*hook)(char c)) {
+    putchar_hook = hook;
+}
+
 void pipe_start(void) {
     pipe_pos = 0;
     pipe_active = 1;
@@ -81,6 +88,7 @@ void scroll_up(void) {
 }
 
 void putchar(char c) {
+    if (putchar_hook) putchar_hook(c);
     if (pipe_active && pipe_pos < 4096) {
         pipe_buffer[pipe_pos++] = c;
     }

@@ -188,6 +188,29 @@ static const command_t commands[] = {
     {NULL, NULL, NULL, false}
 };
 
+void execute_command(const char* cmd_line) {
+    if (!cmd_line || !*cmd_line) return;
+    char cmd_copy[256];
+    strncpy(cmd_copy, cmd_line, 255);
+    cmd_copy[255] = '\0';
+    char* argv[10];
+    int argc = 0;
+    char* token = strtok(cmd_copy, " ");
+    while (token != NULL && argc < 10) {
+        argv[argc++] = token;
+        token = strtok(NULL, " ");
+    }
+    if (argc == 0) return;
+    for (int i = 0; commands[i].name != NULL; i++) {
+        if (strcmp(argv[0], commands[i].name) == 0) {
+            commands[i].func(argc, argv);
+            return;
+        }
+    }
+    // Command not found - output will be captured by putchar hook
+    printf("Command not found: %s\n", argv[0]);
+}
+
 // ------------------------------------------------------------
 // Implementación de comandos
 // ------------------------------------------------------------

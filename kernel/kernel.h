@@ -364,6 +364,7 @@ void kernel_main(uint32_t magic, void* mboot_ptr);
 void kernel_panic(const char* msg, ...);
 void launch_shell(void);
 void nyxfetch(void);
+void execute_command(const char* cmd_line);
 
 void init_gdt(void);
 void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
@@ -458,6 +459,7 @@ void keyboard_irq_handler(void* unused);
 void init_screen(void);
 void putchar(char c);
 int puts(const char* str);
+void set_putchar_hook(void (*hook)(char c));
 int printf(const char* fmt, ...);
 int vprintf(const char* fmt, va_list args);
 void clear_screen(void);

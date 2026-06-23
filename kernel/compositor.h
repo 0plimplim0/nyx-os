@@ -55,6 +55,8 @@ struct window {
     int has_min;
     int has_max;
     window_draw_fn draw;
+    void (*on_key)(struct window* win, char c);
+    void* reserved;
 };
 
 void compositor_init(void);

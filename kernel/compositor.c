@@ -1,6 +1,7 @@
 #include "kernel.h"
 #include "compositor.h"
 #include "font.h"
+#include "terminal_win.h"
 
 static window_t* windows[MAX_WINDOWS];
 static int window_count = 0;
@@ -384,7 +385,13 @@ static void do_start_menu_action(int idx) {
             window_create(200, 140, 400, 300, "Image Viewer", NULL);
             break;
         case 3: // Terminal
-            window_create(80, 80, 640, 400, "Terminal", NULL);
+            {
+                window_t* twin = window_create(80, 80, 640, 400, "Terminal", terminal_win_draw);
+                if (twin) {
+                    twin->reserved = terminal_create_ctx();
+                    twin->on_key = terminal_win_key;
+                }
+            }
             break;
         case 4: // Settings
             window_create(160, 100, 500, 400, "Settings", NULL);
@@ -446,6 +453,7 @@ window_t* window_create(int x, int y, uint32_t w, uint32_t h, const char* title,
     win->workspace = current_workspace;
     win->has_close = 1; win->has_min = 1; win->has_max = 1;
     win->draw = draw;
+    win->on_key = NULL;
     int sl = strlen(title);
     if (sl >= MAX_TITLE) sl = MAX_TITLE - 1;
     memcpy(win->title, title, sl);
@@ -563,19 +571,16 @@ static void about_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t c
     font_draw_string(cx + 10, cy + 80, "inspired by Linux Mint.", fb_rgb(160,160,160), fb_rgb(35,35,40));
 }
 
-static void terminal_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch) {
-    (void)win;
-    fb_fill_rect(cx, cy, cw, ch, fb_rgb(0,0,0));
-    font_draw_string(cx + 5, cy + 5, "NyxOS Terminal", fb_rgb(0,255,0), fb_rgb(0,0,0));
-    font_draw_string(cx + 5, cy + 25, "Type commands below", fb_rgb(100,200,100), fb_rgb(0,0,0));
-    font_draw_string(cx + 5, cy + 45, "$ nyxfetch", fb_rgb(200,200,200), fb_rgb(0,0,0));
-    font_draw_string(cx + 5, cy + ch - 20, "$ _", fb_rgb(0,255,0), fb_rgb(0,0,0));
-}
-
 static void draw_welcome_windows(void) {
     window_create(80, 40, 400, 280, "Welcome to NyxOS", demo_draw_fn);
     window_create(200, 120, 450, 200, "About NyxOS", about_draw_fn);
-    window_create(300, 200, 350, 250, "Terminal", terminal_draw_fn);
+    {
+        window_t* twin = window_create(300, 200, 640, 400, "Terminal", terminal_win_draw);
+        if (twin) {
+            twin->reserved = terminal_create_ctx();
+            twin->on_key = terminal_win_key;
+        }
+    }
 }
 
 void compositor_run(void) {
@@ -722,11 +727,21 @@ void compositor_run(void) {
                 }
             }
         } else {
-            // Keyboard shortcuts
+            // Keyboard shortcuts (always work)
             if (k == '1') { current_workspace = 0; redraw = 1; }
             if (k == '2') { current_workspace = 1; redraw = 1; }
             if (k == '3') { current_workspace = 2; redraw = 1; }
             if (k == '4') { current_workspace = 3; redraw = 1; }
+            // Route printable keys to focused window's key handler
+            window_t* fwin = find_window(focused_id);
+            if (fwin && fwin->on_key && k >= 0x20) {
+                fwin->on_key(fwin, k);
+                redraw = 1;
+            }
+            if (fwin && fwin->on_key && (k == '\n' || k == '\r' || k == '\b' || k == 0x7F)) {
+                fwin->on_key(fwin, k);
+                redraw = 1;
+            }
         }
 
 done_click:
