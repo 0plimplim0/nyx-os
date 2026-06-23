@@ -25,7 +25,8 @@ OBJS_KERNEL = boot.o kernel.o gdt.o gdt_flush.o idt.o idt_load.o isr.o isr_stubs
        serial.o umoddi3.o paging.o switch.o dhcp.o \
        vga_graphics.o doom_nyxos.o \
        vbe.o fb.o mouse.o gui.o font.o compositor.o speaker.o tcp.o \
-       sb16.o doom_nyxos_sound.o terminal_win.o fileman_win.o
+       sb16.o doom_nyxos_sound.o terminal_win.o fileman_win.o \
+       elf.o initramfs.o
 
 DOOM_OBJS = \
     doom_src/am_map.o \
@@ -141,5 +142,14 @@ doom1_wad.o: doom1.wad
 	$(TARGET)-objcopy -I binary -O elf32-i386 -B i386 \
 		--rename-section .data=.rodata,alloc,load,readonly,data,contents $< $@
 
+# Generate initramfs C header
+MKINITRAMFS = ../tools/mkinitramfs.py
+initramfs_data.h: $(MKINITRAMFS)
+	python3 $(MKINITRAMFS) $@ c
+
+initramfs.o: initramfs.c initramfs_data.h
+
+OBJS = $(OBJS_KERNEL) $(DOOM_OBJS) doom1_wad.o
+
 clean:
-	rm -f *.o *.bin doom_src/*.o
+	rm -f *.o *.bin doom_src/*.o initramfs_data.h

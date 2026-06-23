@@ -69,14 +69,21 @@ static vfs_node_t* resolve_path(const char* path) {
 
     char token[MAX_NAME];
     vfs_node_t* result = dir;
-    while ((p = path_token(p, token)) != NULL && *token) {
-        result = find_child(dir, token);
-        if (!result || result->type != 1) return NULL;
-        dir = result;
-    }
-    if (*token) {
-        result = find_child(dir, token);
-        if (!result) return NULL;
+    // Walk directory components until the last one
+    while (1) {
+        char* next = path_token(p, token);
+        if (!next || !*token) break;
+        // Check if there are more components (i.e., this is a directory)
+        if (*next) {
+            result = find_child(dir, token);
+            if (!result || result->type != 1) return NULL;
+            dir = result;
+            p = next;
+        } else {
+            // Last component - can be file or directory
+            result = find_child(dir, token);
+            return result;
+        }
     }
     return result;
 }

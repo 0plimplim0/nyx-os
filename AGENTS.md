@@ -26,7 +26,7 @@ Evolve NyxOS into a functional 32-bit x86 kernel with filesystem, networking, sh
 | v2.1.1 | Full TCP stack, RTL8139 fixes, GUI/window compositor, PC speaker, bitmap font |
 | v2.2.0 | GUI auto-boot: NyxOS Desktop launches at startup instead of text shell |
 | v2.3.0 | Real EXT2 read support: VFS mount layer, auto-mount at /mnt, ls/cd/cat on ext2 |
-| v2.4.0 | *(in progress)* Sound Blaster 16 DMA/IRQ audio driver |
+| v2.4.0 | Sound Blaster 16 DMA/IRQ audio driver (sb16play command, DMA buffer fix, auto-init) |
 
 ## Architecture
 ### Boot flow
@@ -41,7 +41,7 @@ Evolve NyxOS into a functional 32-bit x86 kernel with filesystem, networking, sh
 9. `compositor_init()` + `compositor_run()` (GUI desktop) OR `launch_shell()` (fallback)
 
 ### Critical constraints
-- Paging identity-maps only the first 4 MB. Any static data, BSS, or heap beyond 4 MB causes triple-fault.
+- Paging identity-maps 64 MB (16 page tables). Any static data, BSS, or heap beyond 64 MB causes triple-fault.
 - Heap is 16 MB (bumped from 1 MB for DOOM + framebuffer). Physical allocator bitmap supports up to 512 MB RAM.
 - `_kernel_end` symbol in `linker.ld` marks kernel BSS boundary for memory manager.
 - Serial (`init_serial()`) is a stub — only used via direct `outb(0x3F8, ...)`. VGA text mode (0xB8000) is primary console.
@@ -121,6 +121,7 @@ kernel/
 | fonttest      | Test bitmap font rendering |
 | desktop       | Window compositor desktop |
 | beep/play     | PC speaker tones and melodies |
+| sb16play      | SB16 DMA audio playback: sb16play [freq] [ms] |
 
 ## Shell features
 - Tab completion for command names
@@ -150,7 +151,6 @@ kernel/
 - File Manager window (VFS browsing, directory navigation, file preview)
 
 ## Next features to add
-- Sound Blaster 16 DMA/IRQ audio driver (in progress)
 - ELF loader + initramfs for userspace binaries
 - Compositor polish (resize, minimize, keyboard input routing)
 - ATA/IDE disk driver (write support)

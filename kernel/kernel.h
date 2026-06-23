@@ -39,7 +39,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "2.1.1"
+#define KERNEL_VERSION "3.0.0"
 #define KERNEL_CODENAME "Nightfall"
 #define KERNEL_DATE    "2026"
 
@@ -51,6 +51,15 @@ typedef __builtin_va_list va_list;
 #define KERNEL_BASE      0xC0000000
 #define KERNEL_HEAP_START 0xD0000000
 #define KERNEL_HEAP_SIZE  (16 * 1024 * 1024)  // 16 MB (matches heap.c)
+
+// Segment selectors
+#define KERNEL_CS  0x08
+#define KERNEL_DS  0x10
+#define USER_CS   0x1B
+#define USER_DS   0x23
+#define TSS_SEL   0x28
+
+#define SYSCALL_INT 0x80
 
 #define MAX_PROCESSES    512
 #define MAX_THREADS      1024
@@ -86,6 +95,25 @@ typedef struct process {
     struct process* parent;
     struct process* children;
 } process_t;
+
+typedef struct tss_entry {
+    uint32_t prev_tss;
+    uint32_t esp0;
+    uint32_t ss0;
+    uint32_t esp1;
+    uint32_t ss1;
+    uint32_t esp2;
+    uint32_t ss2;
+    uint32_t cr3;
+    uint32_t eip;
+    uint32_t eflags;
+    uint32_t eax, ecx, edx, ebx;
+    uint32_t esp, ebp, esi, edi;
+    uint32_t es, cs, ss, ds, fs, gs;
+    uint32_t ldt;
+    uint16_t trap;
+    uint16_t iomap_base;
+} __attribute__((packed)) tss_entry_t;
 
 typedef struct {
     uint32_t tid;
@@ -370,6 +398,8 @@ void command_list_matches(const char* partial, char* out, int out_size);
 
 void init_gdt(void);
 void gdt_set_gate(int32_t num, uint32_t base, uint32_t limit, uint8_t access, uint8_t gran);
+void tss_set_stack(uint32_t esp0);
+void load_tss(void);
 void init_idt(void);
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags);
 void init_isr(void);
@@ -393,6 +423,10 @@ void* get_phys_addr(void* virtual_addr);
 void map_page(void* phys_addr, void* virt_addr, uint32_t flags);
 void unmap_page(void* virt_addr);
 void* clone_page_directory(void);
+uint32_t* alloc_page_directory(void);
+uint32_t* get_kernel_page_directory(void);
+void switch_page_directory(uint32_t* pd);
+void map_page_dir(uint32_t* pd, void* phys, void* virt, uint32_t flags);
 
 void init_heap(void);
 void* heap_alloc(size_t size);
@@ -400,6 +434,8 @@ void heap_free(void* ptr);
 
 void init_process(void);
 process_t* create_process(const char* name, void* entry, uint32_t flags);
+process_t* create_user_process(const char* name, void* entry, void* user_stack, uint32_t* page_dir);
+void switch_to_user_process(process_t* proc);
 void destroy_process(uint32_t pid);
 void hide_process(uint32_t pid);
 void unhide_process(uint32_t pid);
@@ -411,7 +447,8 @@ void switch_context(uint32_t* old_esp_ptr, uint32_t new_esp);
 uint32_t create_task_stack(uint32_t stack_top, uint32_t entry_point);
 
 void init_syscalls(void);
-void syscall_handler(uint32_t syscall_no, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4);
+uint32_t syscall_handler_c(uint32_t syscall_no, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4, uint32_t arg5);
+extern void syscall_stub(void);
 void* get_syscall_table(void);
 void register_syscall(uint32_t num, void* handler);
 
@@ -473,6 +510,14 @@ void pipe_start(void);
 int pipe_stop(void);
 const char* pipe_get_data(void);
 int pipe_get_len(void);
+
+// ELF loader
+int elf_load(const uint8_t* data, uint32_t size, process_t** out_proc);
+int elf_validate(const uint8_t* data, uint32_t size);
+
+// initramfs
+int initramfs_load(void);
+void initramfs_boot(void);
 
 void init_ext2(void);
 int  ata_init(void);

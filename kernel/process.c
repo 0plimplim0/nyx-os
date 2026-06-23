@@ -49,6 +49,34 @@ static void init_task_stack(process_t* proc, void* entry_point) {
     *--sp = 0;  // eax
 
     proc->stack = (void*)sp;
+    proc->kernel_stack = (void*)((uint32_t)stack_mem + 4096);
+}
+
+// Set up a stack for a ring-3 user process. When the ISR stub pops this frame
+// and executes iret with CS=USER_CS (ring 3), the CPU will also pop SS and ESP
+// from the stack, transitioning to user mode.
+static void init_user_task_stack(process_t* proc, void* entry_point, void* user_stack_top) {
+    void* stack_mem = kmalloc(4096);
+    if (!stack_mem) return;
+    uint32_t* sp = (uint32_t*)((uint32_t)stack_mem + 4096);
+
+    // iret pops these when switching to ring 3 (SS:ESP are extra for ring transition)
+    *--sp = 0x23;               // SS = user data segment (ring 3)
+    *--sp = (uint32_t)user_stack_top; // ESP (user stack top)
+    *--sp = 0x200;              // EFLAGS (IF set, IOPL=0)
+    *--sp = 0x1B;               // CS = user code segment (ring 3)
+    *--sp = (uint32_t)entry_point; // EIP
+
+    // ISR stub pushes: error code = 0, int number = 32
+    *--sp = 32;                 // int number (irq0)
+    *--sp = 0;                  // error code
+
+    // pusha
+    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
+    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
+
+    proc->stack = (void*)sp;
+    proc->kernel_stack = (void*)((uint32_t)stack_mem + 4096);
 }
 
 process_t* create_process(const char* name, void* entry, uint32_t flags) {
@@ -67,6 +95,38 @@ process_t* create_process(const char* name, void* entry, uint32_t flags) {
     }
     process_table[process_count++] = p;
     return p;
+}
+
+process_t* create_user_process(const char* name, void* entry, void* user_stack, uint32_t* page_dir) {
+    if (process_count >= MAX_PROCESSES) return NULL;
+    process_t* p = (process_t*)kmalloc(sizeof(process_t));
+    if (!p) return NULL;
+    memset_asm(p, 0, sizeof(process_t));
+    p->pid = next_pid++;
+    p->state = 1;
+    p->page_directory = page_dir;
+    strncpy(p->comm, name, 31);
+    p->comm[31] = '\0';
+
+    // Allocate user stack pages if not provided
+    if (!user_stack) {
+        void* stack_page = alloc_page();
+        if (!stack_page) { kfree(p); return NULL; }
+        // Map user stack at high address (below framebuffer at 0xE0000000)
+        uint32_t stack_virt = 0xD0000000 - 4096;
+        map_page_dir(page_dir, stack_page, (void*)stack_virt, 0x7);
+        user_stack = (void*)(stack_virt + 4096);  // stack top
+    }
+
+    init_user_task_stack(p, entry, user_stack);
+    process_table[process_count++] = p;
+    return p;
+}
+
+void switch_to_user_process(process_t* proc) {
+    if (!proc || !proc->page_directory) return;
+    switch_page_directory((uint32_t*)proc->page_directory);
+    tss_set_stack((uint32_t)proc->kernel_stack);
 }
 
 void destroy_process(uint32_t pid) {
@@ -141,6 +201,11 @@ void irq_scheduler_tick(void) {
         current_idx = next;
         process_t* next_proc = process_table[next];
         if (next_proc && next_proc->stack) {
+            // Switch page directory if the process has its own
+            if (next_proc->page_directory) {
+                switch_page_directory((uint32_t*)next_proc->page_directory);
+                tss_set_stack((uint32_t)next_proc->kernel_stack);
+            }
             next_esp = (uint32_t)next_proc->stack;
             return;
         }

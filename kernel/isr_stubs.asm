@@ -68,6 +68,24 @@ irq%1:
     jmp irq_common
 %endmacro
 
+; Syscall interrupt (int 0x80) - ring 3 accessible
+; eax = syscall number, ebx=arg1, ecx=arg2, edx=arg3, esi=arg4, edi=arg5
+global syscall_stub
+extern syscall_handler_c
+syscall_stub:
+    pusha
+    push edi             ; arg5
+    push esi             ; arg4
+    push edx             ; arg3
+    push ecx             ; arg2
+    push ebx             ; arg1
+    push eax             ; syscall number
+    call syscall_handler_c
+    add esp, 24          ; pop 6 args
+    mov [esp], eax       ; store return value in saved eax
+    popa
+    iret
+
 IRQ 0, 32
 IRQ 1, 33
 IRQ 2, 34

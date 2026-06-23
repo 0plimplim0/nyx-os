@@ -7,6 +7,7 @@
 #include "tcp.h"
 #include "sb16.h"
 #include "ext2.h"
+#include "initramfs.h"
 
 // Variables globales del kernel
 process_t* process_table[MAX_PROCESSES];
@@ -127,6 +128,7 @@ static void cmd_desktop(int argc, char** argv);
 static void cmd_beep(int argc, char** argv);
 static void cmd_play(int argc, char** argv);
 static void cmd_sb16play(int argc, char** argv);
+static void cmd_exec(int argc, char** argv);
 static void cmd_tcptest(int argc, char** argv);
 static void cmd_setip(int argc, char** argv);
 static void cmd_mount(int argc, char** argv);
@@ -182,6 +184,7 @@ static const command_t commands[] = {
     {"beep",      cmd_beep,      "Play a tone: beep [freq] [ms]", false},
     {"play",      cmd_play,      "Play a demo melody", false},
     {"sb16play",  cmd_sb16play,  "Test SB16 playback: sb16play [freq] [ms]", false},
+    {"exec",      cmd_exec,      "Execute ELF binary: exec <file>", false},
     {"tcptest",   cmd_tcptest,   "Test TCP: tcptest <ip> <port>", false},
     {"setip",     cmd_setip,     "Set static IP: setip <ip> <mask> <gw>", false},
     {"mount",     cmd_mount,     "Mount EXT2: mount [drive] [part_lba]", false},
@@ -741,6 +744,50 @@ static void cmd_sb16play(int argc, char** argv) {
     printf("SB16 playback done.\n");
 }
 
+#include "elf.h"
+static void cmd_exec(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: exec <file>\n"); return; }
+    const char* path = argv[1];
+
+    // Open the file
+    int fd = vfs_open(path, 0, 0);
+    if (fd < 0) { printf("File not found: %s\n", path); return; }
+    uint32_t size = vfs_fsize(fd);
+    uint8_t* data = vfs_fdata(fd);
+    if (!data || size == 0) { printf("Empty file\n"); vfs_close(fd); return; }
+
+    // Copy to kernel heap
+    uint8_t* copy = (uint8_t*)kmalloc(size);
+    if (!copy) { printf("Out of memory\n"); vfs_close(fd); return; }
+    memcpy_asm(copy, data, size);
+    vfs_close(fd);
+
+    // Validate and load ELF
+    if (!elf_validate(copy, size)) {
+        printf("Not a valid ELF32 executable\n");
+        kfree(copy);
+        return;
+    }
+    printf("Loading ELF: %s (%u bytes)\n", path, size);
+
+    process_t* proc = NULL;
+    if (elf_load(copy, size, &proc) != 0) {
+        printf("ELF load failed\n");
+        kfree(copy);
+        return;
+    }
+
+    // Switch to the user process
+    switch_to_user_process(proc);
+
+    // Process is now in the scheduler. The scheduler will pick it up.
+    // Need to force a context switch to the new process.
+    // Since it interrupts the current execution, we can just return to the shell
+    // and let the timer IRQ handle scheduling.
+    printf("Started ELF process PID=%u\n", proc->pid);
+    kfree(copy);
+}
+
 static uint32_t parse_ip(const char* s) {
     uint32_t ip = 0;
     for (int i = 0; i < 4; i++) {
@@ -1160,6 +1207,8 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
     printf("[INIT] Process Manager...\n"); init_process();
     printf("[INIT] Creating idle process...\n"); ensure_idle_process();
     printf("[INIT] System Calls...\n"); init_syscalls();
+    // Register syscall interrupt (int 0x80, ring 3 accessible)
+    idt_set_gate(SYSCALL_INT, (uint32_t)syscall_stub, KERNEL_CS, 0xEE);
     printf("[INIT] Virtual File System...\n"); init_vfs();
     printf("[INIT] Loading GRUB modules...\n"); init_load_modules();
     printf("[INIT] EXT2 Filesystem...\n"); init_ext2();
@@ -1191,6 +1240,14 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
     kernel_initialized = true;
     printf("\n[READY] NyxOS initialized successfully.\n\n");
     outb(0x3F8, 'O'); outb(0x3F8, 'K'); outb(0x3F8, '\n');
+
+    // Load initramfs and boot init
+    printf("[INIT] Loading initramfs...\n");
+    if (initramfs_load() == 0) {
+        initramfs_boot();
+
+        printf("[INIT] initramfs ready. Use 'exec <file>' to run an ELF binary.\n");
+    }
 
     // Auto-mount EXT2 if available
     printf("[EXT2] Probing ATA drive for EXT2 filesystem...\n");
