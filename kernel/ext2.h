@@ -125,4 +125,14 @@ uint32_t ext2_get_size(const char* path);
 int  ext2_read_file(const char* path, void* buf, uint32_t maxlen);
 int  ext2_readdir(const char* path, dirent_t* entries, uint32_t max_entries);
 
+// Write operations
+int  ext2_write_block(uint32_t block, const void* buf);
+int  ext2_write_inode(uint32_t ino, const ext2_inode_t* inode);
+int  ext2_sync_bgd(uint32_t group);
+int  ext2_sync_superblock(void);
+uint32_t ext2_alloc_block(void);
+uint32_t ext2_alloc_inode(void);
+int  ext2_write_file(const char* path, const void* buf, uint32_t len);
+int  ext2_create_file(const char* path);
+
 #endif

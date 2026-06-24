@@ -308,6 +308,7 @@ int vfs_mount(const char* mount_point, int fs_type, void* fs_data) {
         me->resolve  = ext2_resolve;
         me->get_size = ext2_get_size;
         me->read_file = ext2_read_file;
+        me->write_file = ext2_write_file;
         me->readdir   = ext2_readdir;
     }
 
@@ -363,8 +364,11 @@ int vfs_chdir(const char* path) {
 void vfs_list_dir(const char* path) {
     mount_entry_t* me = vfs_find_mount(path);
     if (me && me->readdir) {
+        int mlen = strlen(me->mount_point);
+        const char* subpath = path + mlen;
+        if (subpath[0] == '\0') subpath = "/";
         dirent_t entries[64];
-        int n = me->readdir(path, entries, 64);
+        int n = me->readdir(subpath, entries, 64);
         if (n < 0) {
             printf("ls: %s: error reading directory\n", path ? path : "");
             return;
@@ -403,8 +407,11 @@ void vfs_list_dir(const char* path) {
 void vfs_cat_file(const char* path) {
     mount_entry_t* me = vfs_find_mount(path);
     if (me && me->read_file) {
+        int mlen = strlen(me->mount_point);
+        const char* subpath = path + mlen;
+        if (subpath[0] == '\0') subpath = "/";
         char buf[512];
-        int n = me->read_file(path, buf, 511);
+        int n = me->read_file(subpath, buf, 511);
         if (n < 0) {
             printf("cat: %s: error reading file\n", path);
             return;
@@ -425,6 +432,14 @@ void vfs_cat_file(const char* path) {
 }
 
 int vfs_touch(const char* path) {
+    mount_entry_t* me = vfs_find_mount(path);
+    if (me && me->write_file) {
+        int mlen = strlen(me->mount_point);
+        const char* subpath = path + mlen;
+        if (subpath[0] == '\0') subpath = "/";
+        // Create empty file via write with len=0
+        return me->write_file(subpath, "", 0) >= 0 ? 0 : -1;
+    }
     vfs_node_t* ino = resolve_path(path);
     if (ino) return 0; // exists
     char child_name[MAX_NAME];
@@ -439,7 +454,37 @@ int vfs_touch(const char* path) {
     return 0;
 }
 
+int vfs_write_file(const char* path, const void* buf, uint32_t len) {
+    mount_entry_t* me = vfs_find_mount(path);
+    if (me && me->write_file) {
+        // Strip mount point prefix before passing to driver
+        int mlen = strlen(me->mount_point);
+        const char* subpath = path + mlen;
+        if (subpath[0] == '\0') subpath = "/";
+        return me->write_file(subpath, buf, len);
+    }
+    // Fallback to RAM VFS
+    vfs_node_t* ino = resolve_path(path);
+    if (!ino || ino->type != 0) return -1;
+    if (ino->data) kfree(ino->data);
+    ino->data = (uint8_t*)kmalloc(len);
+    if (!ino->data && len > 0) return -1;
+    if (len > 0) memcpy(ino->data, buf, len);
+    ino->size = len;
+    return len;
+}
+
 int vfs_cp(const char* src, const char* dst) {
+    // Check if destination is on a mount point
+    mount_entry_t* dst_me = vfs_find_mount(dst);
+    if (dst_me && dst_me->write_file) {
+        // Read source from RAM VFS
+        vfs_node_t* src_ino = resolve_path(src);
+        if (!src_ino || src_ino->type != 0) return -1;
+        return dst_me->write_file(dst + strlen(dst_me->mount_point),
+                                 src_ino->data, src_ino->size);
+    }
+
     vfs_node_t* src_ino = resolve_path(src);
     if (!src_ino || src_ino->type != 0) return -1;
     char child_name[MAX_NAME];

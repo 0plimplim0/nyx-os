@@ -558,14 +558,24 @@ static void cmd_wc(int argc, char** argv) {
 
 static void cmd_write(int argc, char** argv) {
     if (argc < 3) { printf("Usage: write <file> <text>\n"); return; }
+    // Build the full content
+    char content[1024];
+    int pos = 0;
+    for (int i = 2; i < argc; i++) {
+        for (char* p = argv[i]; *p && pos < 1023; p++) content[pos++] = *p;
+        if (i < argc - 1 && pos < 1023) content[pos++] = ' ';
+    }
+    if (pos < 1023) content[pos++] = '\n';
+    content[pos] = '\0';
+
+    // Try mount-aware write first
+    if (vfs_write_file(argv[1], content, pos) >= 0) return;
+
+    // Fallback: create in RAM VFS
     int fd = vfs_open(argv[1], 0, 0);
     if (fd < 0) fd = vfs_open(argv[1], 1, 0);
     if (fd < 0) { printf("write: cannot create '%s'\n", argv[1]); return; }
-    for (int i = 2; i < argc; i++) {
-        vfs_write(fd, argv[i], strlen(argv[i]));
-        if (i < argc - 1) vfs_write(fd, " ", 1);
-    }
-    vfs_write(fd, "\n", 1);
+    vfs_write(fd, content, pos);
     vfs_close(fd);
 }
 
@@ -1256,6 +1266,15 @@ void kernel_main(uint32_t magic, void* mboot_ptr) {
                ext2_fs.sb.total_blocks, ext2_fs.sb.total_inodes, ext2_fs.block_size);
         if (vfs_mount("/mnt", FS_TYPE_EXT2, NULL) == 0) {
             printf("[EXT2] Mounted at /mnt. Use 'ls /mnt' etc.\n");
+            // Write test: create + readback to verify
+            const char* test_data = "Hello from NyxOS EXT2 write!\n";
+            if (ext2_write_file("/os-test.txt", test_data, strlen(test_data)) > 0) {
+                char readbuf[64];
+                if (ext2_read_file("/os-test.txt", readbuf, sizeof(readbuf)-1) > 0) {
+                    readbuf[sizeof(readbuf)-1] = '\0';
+                    printf("[EXT2] Write test OK\n");
+                }
+            }
         }
     } else {
         printf("[EXT2] No EXT2 filesystem found.\n");

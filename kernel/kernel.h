@@ -541,6 +541,8 @@ int  ext2_mount(uint8_t drive, uint32_t part_lba);
 uint32_t ext2_resolve(const char* path);
 uint32_t ext2_get_size(const char* path);
 int  ext2_read_file(const char* path, void* buf, uint32_t maxlen);
+int  ext2_write_file(const char* path, const void* buf, uint32_t len);
+int  ext2_create_file(const char* path);
 int  ext2_readdir(const char* path, dirent_t* entries, uint32_t max_entries);
 
 // Network driver and polling
@@ -575,6 +577,7 @@ typedef struct {
     uint32_t (*resolve)(const char* path);
     uint32_t (*get_size)(const char* path);
     int (*read_file)(const char* path, void* buf, uint32_t maxlen);
+    int (*write_file)(const char* path, const void* buf, uint32_t len);
     int (*readdir)(const char* path, dirent_t* entries, uint32_t max_entries);
 } mount_entry_t;
 
@@ -587,6 +590,7 @@ int vfs_chdir(const char* path);
 void vfs_list_dir(const char* path);
 void vfs_cat_file(const char* path);
 int vfs_touch(const char* path);
+int vfs_write_file(const char* path, const void* buf, uint32_t len);
 int vfs_cp(const char* src, const char* dst);
 void vfs_rename(const char* old, const char* new);
 

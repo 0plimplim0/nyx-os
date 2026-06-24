@@ -52,7 +52,42 @@ int ata_read_sectors(uint8_t drive, uint32_t lba, uint8_t count, void* buf) {
     return count;
 }
 
-int ata_identify(uint8_t drive, uint16_t* buf) {
+int ata_write_sectors(uint8_t drive, uint32_t lba, uint8_t count, const void* buf) {
+    if (ata_busy_wait(ATA_PRIMARY_CTRL, 30000) < 0)
+        return -1;
+
+    uint8_t drv = 0xE0 | (drive << 4) | ((lba >> 24) & 0x0F);
+    outb(ATA_PRIMARY_DRIVE, drv);
+    outb(ATA_PRIMARY_SECCNT, count);
+    outb(ATA_PRIMARY_LBA_LO, (uint8_t)(lba));
+    outb(ATA_PRIMARY_LBA_MI, (uint8_t)(lba >> 8));
+    outb(ATA_PRIMARY_LBA_HI, (uint8_t)(lba >> 16));
+    outb(ATA_PRIMARY_CMD, ATA_CMD_WRITE);
+
+    const uint16_t* ptr = (const uint16_t*)buf;
+    for (int s = 0; s < count; s++) {
+        if (ata_busy_wait(ATA_PRIMARY_CTRL, 30000) < 0)
+            return -1;
+        if (ata_drq_wait(ATA_PRIMARY_DATA) < 0)
+            return -1;
+        for (int i = 0; i < 256; i++)
+            outw(ATA_PRIMARY_DATA, ptr[i]);
+        ptr += 256;
+    }
+
+    // Wait for command completion
+    if (ata_busy_wait(ATA_PRIMARY_CTRL, 30000) < 0)
+        return -1;
+
+    // Flush cache
+    outb(ATA_PRIMARY_CMD, ATA_CMD_CACHE_FLUSH);
+    if (ata_busy_wait(ATA_PRIMARY_CTRL, 30000) < 0)
+        return -1;
+
+    return count;
+}
+
+int ata_identify(uint8_t drive, uint16_t buf[256]) {
     if (ata_busy_wait(ATA_PRIMARY_CTRL, 30000) < 0)
         return -1;
 
