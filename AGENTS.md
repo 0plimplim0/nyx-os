@@ -169,6 +169,11 @@ kernel/
 ## What's new in this session
 - Compositor polish: keyboard input routing (extended keycodes via getkey_poll), workspace keys 1-4 no longer leak to windows, window destruction auto-focus recovery, resize from all edges and corners, terminal cursor-aware input (arrows/home/end/del insert at cursor)
 - ATA/IDE write support: ata_write_sectors (PIO write + cache flush), ext2 write primitives (write_block, write_inode, alloc_block, alloc_inode, create_file), VFS mount-aware write/cp/touch/cat/ls
+- RTC driver: CMOS RTC via ports 0x70/0x71, binary/24h init, read_time, real wall-clock time in `date` command and taskbar
 
 ## Next features to add
-- Real-time clock (RTC) driver
+- Wire DOOM sound module to SB16 output (DOOM has no audio yet)
+- Add `init` as default program (auto-start from initramfs)
+- More syscalls (open, read, sbrk) for realistic userspace
+- ELF dynamic linking (or keep static-only)
+- Clean up boot-time write test (already minimal)
