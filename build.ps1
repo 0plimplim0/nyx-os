@@ -1,7 +1,10 @@
 param([switch]$Clean)
 
 $root = $PSScriptRoot
-$cross = '/mnt/c/Users/kzh/Desktop/Proyectos/nyx-os/cross/bin'
+# Convert Windows path to WSL path dynamically
+$drive = $root[0].ToString().ToLower()
+$wslRoot = "/mnt/$drive" + $root.Substring(2) -replace '\\', '/'
+$cross = "$wslRoot/cross/bin"
 
 function wsl-build {
     param([string]$Target)

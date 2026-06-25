@@ -60,3 +60,18 @@ kernel/genfont.py
 
 # === Issue/PR templates ===
 issue_body.md
+
+# === Log files ===
+*.log
+*.tmp
+
+# === Legacy artifacts ===
+gcc-13.2.0/
+build-gcc/
+*.tar.xz
+
+# === Build output ===
+NyxOS.iso
+iso/boot/nyx-kernel.bin
+iso/boot/initramfs.cpio.gz
+iso/boot/grub/i386-pc/

@@ -12,10 +12,23 @@ if (!(Test-Path $kernel)) {
     exit 1
 }
 
-$env:Path = "C:\Program Files\qemu;$env:Path"
+# Try common QEMU install paths
+$qemuPaths = @(
+    "C:\Program Files\qemu",
+    "C:\Program Files\qemu\i386",
+    "$env:LOCALAPPDATA\Programs\qemu",
+    "$env:USERPROFILE\scoop\apps\qemu\current"
+)
+foreach ($p in $qemuPaths) {
+    if (Test-Path "$p\qemu-system-i386.exe") {
+        $env:Path = "$p;$env:Path"
+        break
+    }
+}
 
 if (!(Get-Command qemu-system-i386 -ErrorAction SilentlyContinue)) {
-    Write-Host "[ERROR] qemu-system-i386 not found in PATH" -ForegroundColor Red
+    Write-Host "[ERROR] qemu-system-i386 not found." -ForegroundColor Red
+    Write-Host "Install QEMU (https://www.qemu.org/download/#windows) or add it to PATH" -ForegroundColor Yellow
     exit 1
 }
 

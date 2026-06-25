@@ -11,7 +11,7 @@
   </a>
   <img src="https://img.shields.io/badge/kernel-80%20KB-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/arch-i686-00ff9d?style=flat" />
-  <img src="https://img.shields.io/badge/status-v2.3.0-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/status-v3.1.0-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/TCP-yes-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/GUI-window%20compositor-00ff9d?style=flat" />
   <a href="https://github.com/kazah-png/nyx-os/issues/1">
@@ -48,10 +48,10 @@ ______          \'/
     N Y X O S
     N I G H T F A L L
   -------------------------------------
-  Kernel:     NyxOS 2.1.1 (Nightfall)
+  Kernel:     NyxOS 3.1.0 (Nightfall)
   Arch:       x86 (32-bit)
-  Memory:     256 MB total, 252 MB free
-  Heap:       1024 KB
+  Memory:     256 MB total, 240 MB free
+  Heap:       16384 KB
   Paging:     Enabled
   Uptime:     42 ticks
   -------------------------------------
@@ -206,23 +206,35 @@ Done.
 ### Boot & initialization
 - Multiboot-compliant (GRUB-ready)
 - Protected mode 32-bit with GDT setup (code/data segments)
-- Paging with identity mapping (first 4 MB)
+- Paging with identity mapping (64 MB, 16 page tables)
 - Full IDT with exception handlers (0-31) and IRQ remapping (32-47)
 - PIT timer at 1000 Hz (interrupt-driven)
 - PS/2 keyboard driver (US and ES layouts + AltGr)
 - PS/2 mouse driver (IRQ12, 3-byte packets, absolute positioning)
 - PC speaker driver (PIT channel 2, square wave, beep/melody)
+- Real-time clock (RTC) driver — CMOS RTC via ports 0x70/0x71, binary/24h init
 
 ### Memory management
 - Bitmap-based physical page allocator (supports up to 512 MB)
 - Kernel heap (`kmalloc`/`kfree`) with first-fit + block splitting + coalescing (16 MB heap)
-- Identity-mapped page tables (4 MB)
+- Identity-mapped page tables (64 MB)
+- Per-process page directories (user PD clones kernel PD with supervisor-only PTEs)
 
 ### Process management
 - Static process table (up to 512 processes)
-- PID/PPID tracking, process states, stealth levels
-- Cooperative multitasking via background task callbacks + IRQ scheduler tick
+- PID/PPID tracking, process states
+- Preemptive multitasking via IRQ scheduler tick (1000 Hz)
 - Context switching (`switch_context`/`create_task_stack` assembly)
+- Background task callbacks for periodic work
+
+### ELF userspace & syscalls (v3.0.0+)
+- **ELF32 loader** — validates, parses PT_LOAD segments, maps pages per-process
+- **Initramfs** — embedded cpio archive with ELF binaries (init.elf, hello.elf)
+- **9 syscalls** via `int 0x80`: `exit`, `write`, `print`, `open`, `read`, `close`, `getpid`, `sbrk`, `exec`
+- **C runtime** — minimal libc with `printf`, `sprintf`, `snprintf`, `malloc`, `free`, string/memory functions
+- **Auto-boot init** — kernel loads and executes `/init.elf` from initramfs at startup
+- **Ring 3 execution** — user processes run in ring 3, I/O ports denied via TSS I/O map
+- **sbrk heap** — per-process heap via page allocation in user page directory
 
 ### Shell & commands
 Built-in command interpreter with **40+ commands**:
@@ -231,10 +243,10 @@ Built-in command interpreter with **40+ commands**:
 |----------|----------|
 | **System** | `help`, `clear`, `nyxfetch`, `uname`, `date`, `version`, `reboot`, `crash` |
 | **Files** | `ls`, `cd`, `pwd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `grep`, `sort`, `wc`, `find`, `tree`, `write`, `which`, `diff` |
-| **Process** | `ps`, `kill`, `mem` |
+| **Process** | `ps`, `kill`, `mem`, `exec` |
 | **Network** | `ifconfig`, `dhcp`, `ping`, `setip`, `tcptest` |
 | **Graphics** | `mode`, `gui`, `fonttest`, `desktop` |
-| **Sound** | `beep`, `play` |
+| **Sound** | `beep`, `play`, `sb16play` |
 | **Misc** | `echo`, `env`, `export`, `history`, `hexdump`, `layout`, `doom` |
 
 **Shell features:**
@@ -284,7 +296,7 @@ Built-in command interpreter with **40+ commands**:
 nyx-os/
 ├── kernel/
 │   ├── boot.asm          # Multiboot header, entry point
-│   ├── kernel.c          # Main kernel, shell, 40+ command handlers
+│   ├── kernel.c          # Main kernel, shell (40+ commands), desktop launch
 │   ├── kernel.h          # Core header (types, structs, inline funcs)
 │   ├── gdt.c / gdt_flush.asm / idt.c / idt_load.asm
 │   ├── isr.c / isr_stubs.asm / irq.c
@@ -293,10 +305,10 @@ nyx-os/
 │   ├── paging.c          # Page tables, virtual memory
 │   ├── process.c         # Process management + background tasks
 │   ├── switch.asm        # Context switch assembly
-│   ├── syscall.c         # System calls
+│   ├── syscall.c         # System calls (9 handlers via int 0x80)
 │   ├── vfs.c             # Ramdisk VFS + mount table + pipe
-│   ├── ext2.c / ext2.h   # EXT2 filesystem driver (read-only)
-│   ├── ata.c / ata.h     # ATA/IDE PIO disk driver
+│   ├── ext2.c / ext2.h   # EXT2 filesystem driver (read/write)
+│   ├── ata.c / ata.h     # ATA/IDE PIO disk driver (read/write)
 │   ├── dhcp.c            # DHCP client
 │   ├── net.c / tcp.c / tcp.h / udp.c / ip.c / ethernet.c
 │   ├── arp.c / icmp.c / rtl8139.c
@@ -304,6 +316,7 @@ nyx-os/
 │   ├── keyboard.c        # PS/2 driver (US/ES layouts, AltGr)
 │   ├── screen.c          # VGA text mode (80x25) + putchar hook
 │   ├── serial.c          # COM1 debug stub
+│   ├── rtc.c             # CMOS RTC driver
 │   ├── vbe.c             # Bochs VBE framebuffer driver
 │   ├── fb.c              # Framebuffer abstraction
 │   ├── mouse.c           # PS/2 mouse driver (IRQ12)
@@ -314,14 +327,26 @@ nyx-os/
 │   ├── fileman_win.c / fileman_win.h    # File Manager window
 │   ├── speaker.c / speaker.h    # PC speaker driver
 │   ├── sb16.c / sb16.h          # Sound Blaster 16 driver (DMA/IRQ)
+│   ├── elf.c / elf.h     # ELF32 loader for userspace binaries
+│   ├── initramfs.c / initramfs.h  # Initramfs cpio parser
+│   ├── initramfs_data.h  # Generated embedded initramfs archive
 │   ├── vga_graphics.c    # VGA mode 13h (DOOM)
 │   ├── doom_nyxos.c / doom_nyxos_sound.c  # DOOM generic port
 │   └── doom_src/         # DOOM engine source
+├── user/
+│   ├── crt0.asm          # CRT0 for userspace ELF binaries
+│   ├── syscall.h         # Syscall inline wrappers
+│   ├── libc.h / libc.c   # Minimal C library (printf, malloc, string, stdio, stdlib)
+│   ├── init.c            # Init program (first userspace process)
+│   ├── hello.asm         # Test ELF binary
+│   └── makefile          # User-space build rules (included by kernel/Makefile)
 ├── tools/
 │   ├── build.sh          # ISO builder (grub-mkrescue)
-│   └── qemu_launch.ps1   # Windows QEMU launcher (delegates to run.ps1)
+│   ├── mkinitramfs.py    # Initramfs cpio generation script
+│   ├── qemu_launch.ps1   # Windows QEMU launcher
+│   └── qemu_launch.sh    # Linux QEMU launcher
 ├── build.ps1             # Windows build script
-├── run.ps1               # Windows QEMU launcher (gui/serial/net/debug)
+├── run.ps1               # Windows QEMU launcher (gui/serial/net)
 ├── AGENTS.md             # Agent context for AI-assisted development
 ├── Makefile              # Top-level build
 └── README.md
@@ -394,23 +419,28 @@ See the full **[NyxOS Status Report](https://github.com/kazah-png/nyx-os/issues/
 ### What works
 - ✅ Full boot sequence to GUI desktop (or text shell fallback)
 - ✅ 40+ shell commands with Tab completion, env vars, pipes, history
-- ✅ Ramdisk VFS + EXT2 read support (auto-mount at /mnt)
+- ✅ Ramdisk VFS + EXT2 read/write (auto-mount at /mnt)
 - ✅ Real networking (RTL8139 + ARP/IP/UDP/ICMP/DHCP/TCP)
 - ✅ Window compositor (32 windows, workspaces, taskbar, Start menu)
 - ✅ Terminal emulator window with scrollback and command execution
 - ✅ File Manager window with VFS directory browsing
 - ✅ Interrupt-driven timer, keyboard, mouse
-- ✅ Sound Blaster 16 DSP detection, DMA programming, mixer
+- ✅ Sound Blaster 16 DSP detection, DMA programming, mixer, PCM playback
 - ✅ PC speaker tones and melodies
 - ✅ DOOM game (VGA mode 13h, doomgeneric port)
 - ✅ VBE framebuffer (1024x768x32)
 - ✅ Bitmap font rendering
+- ✅ ELF32 userspace loader with initramfs (auto-boot init.elf)
+- ✅ 9 syscalls via int 0x80 (exit, write, print, open, read, close, getpid, sbrk, exec)
+- ✅ Minimal C library for userspace (printf, malloc, free, snprintf, string ops)
+- ✅ Real-time clock (RTC) driver with wall-clock time display
+- ✅ Desktop polish (wallpaper, right-click context menu, Settings window, File Manager toolbar)
 
 ### What's being built
-- 🔄 Sound Blaster 16 IRQ-driven audio playback (DMA + interrupt)
-- 🔄 ELF loader + initramfs for userspace binaries
-- 🔄 ATA/IDE disk driver (write support)
-- 🔄 Real-time clock (RTC) driver
+- 🔄 DOOM sound: wire DOOM sound module to SB16 output
+- 🔄 Scrollbar in File Manager window
+- 🔄 Drag-reorder desktop icons
+- 🔄 Right-click context menu in File Manager (rename, copy, paste)
 
 ---
 
