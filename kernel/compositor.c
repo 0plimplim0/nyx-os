@@ -894,25 +894,36 @@ static int desktop_icon_hit(int mx, int my) {
     return -1;
 }
 
+// Drag-reorder desktop icons
+static int drag_icon_idx = -1;
+static int drag_icon_ofs_x = 0, drag_icon_ofs_y = 0;
+
+static void draw_icon_at(int i) {
+    int x = desktop_icon_x[i];
+    int y = desktop_icon_y[i];
+    int hl = (i == drag_icon_idx);
+    fb_fill_rect(x, y, ICON_SIZE, ICON_SIZE, hl ? fb_rgb(65,70,95) : fb_rgb(45,50,65));
+    fb_fill_rect(x+1, y+1, ICON_SIZE-2, ICON_SIZE-2, hl ? fb_rgb(75,80,105) : fb_rgb(55,60,75));
+    uint32_t icon_color[] = {
+        fb_rgb(70,130,200), fb_rgb(0,200,0), fb_rgb(200,50,50),
+        fb_rgb(200,200,50), fb_rgb(100,200,100), fb_rgb(200,100,200)
+    };
+    fb_fill_rect(x+12, y+8, ICON_SIZE-24, ICON_SIZE-24, icon_color[i % 6]);
+    fb_fill_rect(x+18, y+14, ICON_SIZE-36, 3, fb_rgb(255,255,255));
+    fb_fill_rect(x+18, y+22, ICON_SIZE-36, 3, fb_rgb(255,255,255));
+    fb_fill_rect(x+18, y+30, ICON_SIZE-36, 3, fb_rgb(255,255,255));
+    int tw = strlen(desktop_icon_names[i]) * 8;
+    int tx = x + (ICON_SIZE - tw) / 2;
+    if (tx < 0) tx = 0;
+    font_draw_string(tx, y + ICON_SIZE + 2, desktop_icon_names[i], fb_rgb(220,220,220), fb_rgb(30,35,50));
+}
+
 static void draw_desktop_icons(void) {
     for (int i = 0; i < NUM_DESKTOP_ICONS; i++) {
-        int x = desktop_icon_x[i];
-        int y = desktop_icon_y[i];
-        fb_fill_rect(x, y, ICON_SIZE, ICON_SIZE, fb_rgb(45,50,65));
-        fb_fill_rect(x+1, y+1, ICON_SIZE-2, ICON_SIZE-2, fb_rgb(55,60,75));
-        uint32_t icon_color[] = {
-            fb_rgb(70,130,200), fb_rgb(0,200,0), fb_rgb(200,50,50),
-            fb_rgb(200,200,50), fb_rgb(100,200,100), fb_rgb(200,100,200)
-        };
-        fb_fill_rect(x+12, y+8, ICON_SIZE-24, ICON_SIZE-24, icon_color[i % 6]);
-        fb_fill_rect(x+18, y+14, ICON_SIZE-36, 3, fb_rgb(255,255,255));
-        fb_fill_rect(x+18, y+22, ICON_SIZE-36, 3, fb_rgb(255,255,255));
-        fb_fill_rect(x+18, y+30, ICON_SIZE-36, 3, fb_rgb(255,255,255));
-        int tw = strlen(desktop_icon_names[i]) * 8;
-        int tx = x + (ICON_SIZE - tw) / 2;
-        if (tx < 0) tx = 0;
-        font_draw_string(tx, y + ICON_SIZE + 2, desktop_icon_names[i], fb_rgb(220,220,220), fb_rgb(30,35,50));
+        if (i == drag_icon_idx) continue; // drawn last on top
+        draw_icon_at(i);
     }
+    if (drag_icon_idx >= 0) draw_icon_at(drag_icon_idx);
 }
 
 static void draw_welcome_windows(void) {
@@ -968,6 +979,45 @@ void compositor_run(void) {
             resize_id = 0; redraw = 1;
         }
 
+        if (drag_icon_idx >= 0 && !(btns & 1)) {
+            int cx = desktop_icon_x[drag_icon_idx] + ICON_SIZE / 2;
+            int cy = desktop_icon_y[drag_icon_idx] + ICON_SIZE / 2;
+            int nearest = 0, near_dist = 999999;
+            for (int i = 0; i < NUM_DESKTOP_ICONS; i++) {
+                int sx = 20 + i * (ICON_SIZE + ICON_PAD) + ICON_SIZE / 2;
+                int dx = cx - sx, dy = cy - (20 + ICON_SIZE / 2);
+                int d = dx * dx + dy * dy;
+                if (d < near_dist) { near_dist = d; nearest = i; }
+            }
+            int old_idx = drag_icon_idx;
+            int moved = (nearest != old_idx);
+            if (moved) {
+                const char* name = desktop_icon_names[old_idx];
+                int action = desktop_icon_actions[old_idx];
+                if (nearest < old_idx) {
+                    for (int i = old_idx; i > nearest; i--) {
+                        desktop_icon_names[i] = desktop_icon_names[i-1];
+                        desktop_icon_actions[i] = desktop_icon_actions[i-1];
+                    }
+                } else {
+                    for (int i = old_idx; i < nearest; i++) {
+                        desktop_icon_names[i] = desktop_icon_names[i+1];
+                        desktop_icon_actions[i] = desktop_icon_actions[i+1];
+                    }
+                }
+                desktop_icon_names[nearest] = name;
+                desktop_icon_actions[nearest] = action;
+            }
+            for (int i = 0; i < NUM_DESKTOP_ICONS; i++) {
+                desktop_icon_x[i] = 20 + i * (ICON_SIZE + ICON_PAD);
+                desktop_icon_y[i] = 20;
+            }
+            if (!moved) do_start_menu_action(desktop_icon_actions[old_idx]);
+            drag_icon_idx = -1;
+            redraw = 1;
+            goto done_click;
+        }
+
         // Right-click: desktop context menu
         if ((btns & 2) && !(btns & 1)) {
             // Check if we hit desktop (not on a window, not on taskbar)
@@ -1008,7 +1058,16 @@ void compositor_run(void) {
         }
 
         if (btns & 1) {
-            if (drag_id) {
+            if (drag_icon_idx >= 0) {
+                int nx = mx - drag_icon_ofs_x;
+                int ny = my - drag_icon_ofs_y;
+                if (nx < 0) nx = 0;
+                if (ny < 0) ny = 0;
+                desktop_icon_x[drag_icon_idx] = nx;
+                desktop_icon_y[drag_icon_idx] = ny;
+                redraw = 1;
+                goto done_click;
+            } else if (drag_id) {
                 window_t* win = find_window(drag_id);
                 if (win) {
                     window_move(drag_id, mx - win->drag_off_x, my - win->drag_off_y);
@@ -1116,7 +1175,9 @@ void compositor_run(void) {
                 {
                     int icon_idx = desktop_icon_hit(mx, my);
                     if (icon_idx >= 0) {
-                        do_start_menu_action(desktop_icon_actions[icon_idx]);
+                        drag_icon_idx = icon_idx;
+                        drag_icon_ofs_x = mx - desktop_icon_x[icon_idx];
+                        drag_icon_ofs_y = my - desktop_icon_y[icon_idx];
                         redraw = 1;
                         goto done_click;
                     }
