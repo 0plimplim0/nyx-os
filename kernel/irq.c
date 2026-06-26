@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "apic.h"
 
 extern void irq0(void);  extern void irq1(void);  extern void irq2(void);  extern void irq3(void);
 extern void irq4(void);  extern void irq5(void);  extern void irq6(void);  extern void irq7(void);
@@ -45,6 +46,16 @@ void irq_handler(uint64_t int_no) {
     }
 }
 
+void irq_eoi(uint64_t int_no) {
+    (void)int_no;
+    if (apic_initialized) {
+        apic_eoi();
+    } else {
+        if (int_no >= 40) outb(0xA0, 0x20);
+        outb(0x20, 0x20);
+    }
+}
+
 void irq_install_handler(int irq, void (*handler)(void*)) {
     if (irq >= 0 && irq < 16) {
         irq_handlers[irq] = handler;
@@ -57,6 +68,8 @@ void irq_unmask(int irq) {
     } else {
         outb(0xA1, inb(0xA1) & ~(1 << (irq - 8)));
     }
+    // Also unmask on I/O APIC if available
+    ioapic_unmask_irq(irq);
 }
 
 void irq_mask(int irq) {
@@ -65,4 +78,6 @@ void irq_mask(int irq) {
     } else {
         outb(0xA1, inb(0xA1) | (1 << (irq - 8)));
     }
+    // Also mask on I/O APIC if available
+    ioapic_mask_irq(irq);
 }

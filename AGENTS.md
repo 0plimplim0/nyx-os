@@ -31,13 +31,14 @@ Evolve NyxOS into a functional x86_64 kernel with filesystem, networking, shell,
 | v3.1.0 | RTC driver, more syscalls (open/read/close/getpid/sbrk/fsize/exec), libc (printf/malloc/snprintf), initramfs auto-boot, desktop polish (right-click, settings, wallpaper) |
 | v4.0.0 | Full x86_64 native (long mode, 4-level paging, syscall/sysret, ELF64, ring 3), clean 32-bit dead code removal, docs corrected |
 | v4.1.0 | Higher-half kernel mapping (PML4[256] mirror), user/kernel page-table isolation (user has no identity mapping), CR3 switching in ISR/IRQ/syscall entries, scheduler uses next_cr3 |
+| v4.2.0 | NX bit (No-Execute) + SMEP (Supervisor Mode Execution Prevention), PAGE_NX added to user stack/heap/data, Local APIC + I/O APIC init, CPUID detection |
 
 ## Architecture
 ### Boot flow
 1. `boot.asm` (multiboot header, GDT, paging off) → `kernel_main`
 2. `init_gdt()` → `init_idt()` → `init_isr()` → `init_irq()`
 3. `init_memory()` (bitmap allocator) → `init_paging()` (identity-map 1:1 up to 4MB) → `init_heap()` (16MB heap)
-4. `vbe_init()` → `vbe_set_mode(1024, 768, 32)` → `fb_init()` → `init_timer(1000)` → `init_keyboard()`
+4. `vbe_init()` → `vbe_set_mode(1024, 768, 32)` → `fb_init()` → `init_apic()` → `init_timer(1000)` → `init_keyboard()`
 5. `init_process()` → `ensure_idle_process()` → `init_syscalls()` → `init_vfs()` → `init_load_modules()`
 6. `init_ext2()` → `init_net()` → `tcp_init()` → `init_background_tasks()`
 7. `mouse_init()` → `speaker_init()` → `sb16_init()` → register IRQ handlers → `sti`

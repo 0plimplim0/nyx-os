@@ -7,6 +7,9 @@ BITS 64
 
 extern kernel_pml4_phys
 extern next_cr3
+extern saved_rsp
+extern next_rsp
+extern irq_eoi
 
 ; Save all registers (15 pushes)
 %macro SAVE_REGS 0
@@ -192,8 +195,6 @@ IRQ 15, 47
 
 extern irq_handler
 extern irq_scheduler_tick
-extern saved_rsp
-extern next_rsp
 irq_common:
     ; Switch to kernel page tables immediately
     ; CPU already switched to kernel stack (via TSS.RSP0 = higher half addr)
@@ -205,13 +206,9 @@ irq_common:
     SAVE_REGS
     mov rdi, [rsp + 128]     ; int_no
     call irq_handler
-    ; Send EOI
-    mov al, 0x20
-    cmp byte [rsp + 128], 40
-    jb .master_only
-    out 0xA0, al
-.master_only:
-    out 0x20, al
+    ; Send EOI (handles APIC or legacy PIC)
+    mov rdi, [rsp + 128]     ; int_no
+    call irq_eoi
     ; Scheduler tick
     mov [saved_rsp], rsp
     call irq_scheduler_tick

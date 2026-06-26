@@ -491,6 +491,7 @@ void irq_handler(uint64_t irq_no);
 void irq_install_handler(int irq, void (*handler)(void*));
 void irq_unmask(int irq);
 void irq_mask(int irq);
+void irq_eoi(uint64_t int_no);
 
 void init_memory(uint64_t mem_size);
 void* kmalloc(size_t size);

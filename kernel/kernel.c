@@ -3,6 +3,7 @@
 // ============================================================
 #include "kernel.h"
 #include "compositor.h"
+#include "apic.h"
 #include "rtc.h"
 #include "speaker.h"
 #include "tcp.h"
@@ -1169,6 +1170,7 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
     printf("[INIT] Physical Memory Manager...\n"); init_memory(mem_total);
 
     printf("[INIT] Paging...\n"); init_paging();
+    printf("[INIT] APIC...\n"); init_apic();
     printf("[INIT] Kernel Heap...\n"); init_heap();
     printf("[INIT] VBE (Bochs)...\n"); vbe_init();
     printf("[INIT] VBE mode 1024x768x32...\n");

@@ -3,15 +3,15 @@
 </div>
 
 <div align="center">
-  <strong>Custom 32-bit x86 kernel · C and Assembly · General-purpose OS</strong>
+  <strong>Custom x86_64 kernel · C and Assembly · General-purpose OS</strong>
   <br/><br/>
   <!-- Badges -->
   <a href="https://github.com/kazah-png/nyx-os/releases">
     <img src="https://img.shields.io/github/v/release/kazah-png/nyx-os?style=flat&color=00ff9d&label=release" />
   </a>
-  <img src="https://img.shields.io/badge/kernel-80%20KB-00ff9d?style=flat" />
-  <img src="https://img.shields.io/badge/arch-i686-00ff9d?style=flat" />
-  <img src="https://img.shields.io/badge/status-v3.1.0-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/kernel-120%20KB-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/arch-x86__64-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/status-v4.2.0-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/TCP-yes-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/GUI-window%20compositor-00ff9d?style=flat" />
   <a href="https://github.com/kazah-png/nyx-os/issues/1">
@@ -48,11 +48,12 @@ ______          \'/
     N Y X O S
     N I G H T F A L L
   -------------------------------------
-  Kernel:     NyxOS 3.1.0 (Nightfall)
-  Arch:       x86 (32-bit)
+  Kernel:     NyxOS 4.2.0 (Nightfall)
+  Arch:       x86_64 (long mode)
   Memory:     256 MB total, 240 MB free
   Heap:       16384 KB
   Paging:     Enabled
+  NX+SMEP:    Enabled
   Uptime:     42 ticks
   -------------------------------------
 ```
@@ -61,9 +62,9 @@ ______          \'/
 
 ## About
 
-**NyxOS** is a from-scratch 32-bit x86 kernel built as a general-purpose OS for low-level systems programming. It boots via Multiboot (GRUB-compatible), runs in protected mode with paging, and provides a clean foundation for kernel development.
+**NyxOS** is a from-scratch x86_64 kernel built as a general-purpose OS for low-level systems programming. It boots via Multiboot (GRUB-compatible), runs in long mode with 4-level paging, and provides a clean foundation for kernel development.
 
-The project implements core kernel primitives, a custom network stack (RTL8139 NIC + ARP/IP/UDP/ICMP + DHCP), and a ramdisk filesystem — all written in C and x86 Assembly with no external libraries.
+The project implements core kernel primitives, a custom network stack (RTL8139 NIC + ARP/IP/UDP/ICMP/DHCP + TCP), a window compositor GUI, and a Sound Blaster 16 audio driver — all written in C and x86_64 Assembly with no external libraries.
 
 ---
 
@@ -205,10 +206,11 @@ Done.
 
 ### Boot & initialization
 - Multiboot-compliant (GRUB-ready)
-- Protected mode 32-bit with GDT setup (code/data segments)
-- Paging with identity mapping (64 MB, 16 page tables)
-- Full IDT with exception handlers (0-31) and IRQ remapping (32-47)
+- x86_64 long mode with GDT setup (64-bit code/data, TSS)
+- 4-level paging with identity + higher-half kernel mapping (PML4[256] mirror)
+- Full IDT with exception handlers and IRQ remapping
 - PIT timer at 1000 Hz (interrupt-driven)
+- APIC timer support (Local APIC + I/O APIC initialization)
 - PS/2 keyboard driver (US and ES layouts + AltGr)
 - PS/2 mouse driver (IRQ12, 3-byte packets, absolute positioning)
 - PC speaker driver (PIT channel 2, square wave, beep/melody)
@@ -217,8 +219,10 @@ Done.
 ### Memory management
 - Bitmap-based physical page allocator (supports up to 512 MB)
 - Kernel heap (`kmalloc`/`kfree`) with first-fit + block splitting + coalescing (16 MB heap)
-- Identity-mapped page tables (64 MB)
-- Per-process page directories (user PD clones kernel PD with supervisor-only PTEs)
+- Identity-mapped page tables (64 MB) + higher-half kernel mapping
+- Per-process page directories (user PML4 clones kernel higher half only)
+- User/kernel page-table isolation (user has no identity mapping, CR3 switching in ISR/IRQ/syscall)
+- NX bit (No-Execute) on user stack/heap/data pages, SMEP (Supervisor Mode Execution Prevention)
 
 ### Process management
 - Static process table (up to 512 processes)
@@ -228,12 +232,12 @@ Done.
 - Background task callbacks for periodic work
 
 ### ELF userspace & syscalls (v3.0.0+)
-- **ELF32 loader** — validates, parses PT_LOAD segments, maps pages per-process
-- **Initramfs** — embedded cpio archive with ELF binaries (init.elf, hello.elf)
-- **9 syscalls** via `int 0x80`: `exit`, `write`, `print`, `open`, `read`, `close`, `getpid`, `sbrk`, `exec`
+- **ELF64 loader** — validates, parses PT_LOAD segments, maps pages per-process
+- **Initramfs** — embedded cpio archive with ELF64 binaries (init.elf, hello.elf)
+- **10 syscalls** via `syscall`/`sysret`: `exit`, `write`, `print`, `open`, `read`, `close`, `getpid`, `sbrk`, `fsize`, `exec`
 - **C runtime** — minimal libc with `printf`, `sprintf`, `snprintf`, `malloc`, `free`, string/memory functions
 - **Auto-boot init** — kernel loads and executes `/init.elf` from initramfs at startup
-- **Ring 3 execution** — user processes run in ring 3, I/O ports denied via TSS I/O map
+- **Ring 3 execution** — user processes run in ring 3, I/O ports denied via TSS I/O map base
 - **sbrk heap** — per-process heap via page allocation in user page directory
 
 ### Shell & commands
@@ -359,10 +363,10 @@ nyx-os/
 ### Prerequisites
 
 ```
-i686-elf-gcc / i686-elf-ld (cross-compiler, provided in cross/)
+x86_64-elf-gcc / x86_64-elf-ld (cross-compiler) or host GCC with -m64
 nasm  (>= 2.14)
 GNU make
-QEMU  (for emulation)
+QEMU  (>= 8.0, for emulation)
 ```
 
 ### Build
@@ -384,22 +388,22 @@ make -C kernel
 
 **Quick serial test:**
 ```bash
-qemu-system-i386 -kernel kernel/nyx-kernel.bin -m 256M -no-reboot -serial stdio
+qemu-system-x86_64 -kernel kernel/nyx-kernel.bin -m 512M -no-reboot -serial stdio
 ```
 
 **With GUI (desktop):**
 ```bash
-qemu-system-i386 -kernel kernel/nyx-kernel.bin -m 256M -no-reboot
+qemu-system-x86_64 -kernel kernel/nyx-kernel.bin -m 512M -no-reboot
 ```
 
 **With networking:**
 ```bash
-qemu-system-i386 -kernel kernel/nyx-kernel.bin -m 256M -nic user,model=rtl8139
+qemu-system-x86_64 -kernel kernel/nyx-kernel.bin -m 512M -nic user,model=rtl8139
 ```
 
 **With sound + disk + network:**
 ```bash
-qemu-system-i386 -kernel kernel/nyx-kernel.bin -m 256M -hda ext2-test.img -nic user,model=rtl8139 -soundhw sb16
+qemu-system-x86_64 -kernel kernel/nyx-kernel.bin -m 512M -hda ext2-test.img -nic user,model=rtl8139 -audiodev dsound,id=audio0 -device sb16,audiodev=audio0
 ```
 
 **Windows (PowerShell):**
@@ -423,24 +427,28 @@ See the full **[NyxOS Status Report](https://github.com/kazah-png/nyx-os/issues/
 - ✅ Real networking (RTL8139 + ARP/IP/UDP/ICMP/DHCP/TCP)
 - ✅ Window compositor (32 windows, workspaces, taskbar, Start menu)
 - ✅ Terminal emulator window with scrollback and command execution
-- ✅ File Manager window with VFS directory browsing
-- ✅ Interrupt-driven timer, keyboard, mouse
+- ✅ File Manager window with VFS directory browsing and scrollbar
+- ✅ Interrupt-driven timer (PIT + APIC), keyboard, mouse
 - ✅ Sound Blaster 16 DSP detection, DMA programming, mixer, PCM playback
+- ✅ DOOM game (VGA mode 13h, doomgeneric port) with SB16 sound
 - ✅ PC speaker tones and melodies
-- ✅ DOOM game (VGA mode 13h, doomgeneric port)
 - ✅ VBE framebuffer (1024x768x32)
 - ✅ Bitmap font rendering
-- ✅ ELF32 userspace loader with initramfs (auto-boot init.elf)
-- ✅ 9 syscalls via int 0x80 (exit, write, print, open, read, close, getpid, sbrk, exec)
+- ✅ x86_64 long mode, 4-level paging, higher-half kernel mapping
+- ✅ User/kernel page-table isolation, CR3 switching in ISR/IRQ/syscall
+- ✅ NX bit (No-Execute) + SMEP (Supervisor Mode Execution Prevention)
+- ✅ Local APIC + I/O APIC initialization
+- ✅ ELF64 userspace loader with initramfs (auto-boot init.elf)
+- ✅ 10 syscalls via syscall/sysret (exit, write, print, open, read, close, getpid, sbrk, fsize, exec)
 - ✅ Minimal C library for userspace (printf, malloc, free, snprintf, string ops)
 - ✅ Real-time clock (RTC) driver with wall-clock time display
 - ✅ Desktop polish (wallpaper, right-click context menu, Settings window, File Manager toolbar)
 
 ### What's being built
-- 🔄 DOOM sound: wire DOOM sound module to SB16 output
-- 🔄 Scrollbar in File Manager window
 - 🔄 Drag-reorder desktop icons
 - 🔄 Right-click context menu in File Manager (rename, copy, paste)
+- 🔄 SMP (multi-core) bringup via APIC IPI
+- 🔄 Page fault advanced features (COW, demand paging)
 
 ---
 

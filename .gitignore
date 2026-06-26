@@ -5,27 +5,25 @@
 *.elf
 *.bin
 *.iso
-*.cpio.gz
 NyxOS.iso
+iso/boot/nyx-kernel.bin
+iso/boot/initramfs.cpio.gz
+iso/boot/grub/i386-pc/
 
-# === Cross-compiler ===
+# === Cross-compiler & toolchain ===
 cross/
 i686-elf-tools-linux.zip
-
-# === Toolchain source ===
 binutils-2.41/
 build-binutils/
 gcc-13.2.0/
+build-gcc/
 *.tar.gz
+*.tar.xz
 *.zip
 
 # === QEMU / test logs ===
 *.log
-qemu.log
-qemu_trace.log
-qemu_int.log
-iso_trace.log
-nyxos-test*.log
+*.tmp
 wget-log*
 
 # === IDE ===
@@ -61,17 +59,5 @@ kernel/genfont.py
 # === Issue/PR templates ===
 issue_body.md
 
-# === Log files ===
-*.log
-*.tmp
-
 # === Legacy artifacts ===
-gcc-13.2.0/
-build-gcc/
-*.tar.xz
-
-# === Build output ===
-NyxOS.iso
-iso/boot/nyx-kernel.bin
-iso/boot/initramfs.cpio.gz
-iso/boot/grub/i386-pc/
+binutils-2.41.tar.gz
