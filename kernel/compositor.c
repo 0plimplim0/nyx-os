@@ -317,7 +317,7 @@ static const char* ctx_menu_items[] = {
 // Forward declarations
 static void redraw_all(void);
 static void do_start_menu_action(int idx);
-static void settings_win_click(window_t* win, int mx, int my);
+static void settings_win_click(window_t* win, int mx, int my, int btn);
 
 static void draw_ctx_menu(void) {
     if (!ctx_menu_open) return;
@@ -810,7 +810,8 @@ static void settings_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_
     }
 }
 
-static void settings_win_click(window_t* win, int mx, int my) {
+static void settings_win_click(window_t* win, int mx, int my, int btn) {
+    (void)btn;
     int* tab = win->reserved ? (int*)win->reserved : NULL;
     if (!tab) return;
     int cx = win->x, cy = win->y + TITLE_H;
@@ -994,7 +995,14 @@ void compositor_run(void) {
                     redraw = 1;
                 }
             } else {
+                // Right-click on a window → route to window's on_click
                 ctx_menu_open = 0;
+                for (int i = 0; i < nw; i++)
+                    if (window_hit(sorted_win[i], mx, my)) {
+                        if (sorted_win[i]->on_click)
+                            sorted_win[i]->on_click(sorted_win[i], mx, my, 2);
+                        break;
+                    }
             }
             goto done_click;
         }
@@ -1147,7 +1155,7 @@ void compositor_run(void) {
                             hit->resize_start_h = hit->h;
                             resize_id = hit->id;
                         } else if (hit->on_click) {
-                            hit->on_click(hit, mx, my);
+                            hit->on_click(hit, mx, my, 1);
                             redraw = 1;
                         }
                     }

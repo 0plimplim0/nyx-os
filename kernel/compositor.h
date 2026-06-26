@@ -61,7 +61,7 @@ struct window {
     int has_max;
     window_draw_fn draw;
     void (*on_key)(struct window* win, int key);
-    void (*on_click)(struct window* win, int mx, int my);
+    void (*on_click)(struct window* win, int mx, int my, int btn);
     void* reserved;
 };
 

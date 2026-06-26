@@ -7,6 +7,8 @@
 #define BTN_SPACE 6
 #define HEADER_H  18
 #define SCROLL_W  12
+#define CTX_W     160
+#define CTX_ITEM_H 20
 
 fileman_win_t* fileman_create_ctx(void) {
     fileman_win_t* fm = (fileman_win_t*)kmalloc(sizeof(fileman_win_t));
@@ -107,6 +109,75 @@ void fileman_new_folder(fileman_win_t* fm) {
     snprintf(fm->status, sizeof(fm->status), "Enter folder name:");
 }
 
+void fileman_new_file(fileman_win_t* fm); // forward
+
+static void ctx_rename(fileman_win_t* fm) {
+    if (fm->sel_index < 0 || fm->sel_index >= fm->entry_count) return;
+    strncpy(fm->input_buf, fm->entries[fm->sel_index], sizeof(fm->input_buf) - 1);
+    fm->input_pos = strlen(fm->input_buf);
+    fm->input_mode = 3;
+    fm->input_cursor_tick = get_ticks();
+    snprintf(fm->status, sizeof(fm->status), "Rename:");
+}
+
+static void ctx_copy(fileman_win_t* fm) {
+    if (fm->sel_index < 0 || fm->sel_index >= fm->entry_count) return;
+    fileman_get_path(fm, fm->entries[fm->sel_index], fm->clipboard_path, sizeof(fm->clipboard_path));
+    fm->clipboard_mode = 1;
+    snprintf(fm->status, sizeof(fm->status), "Copied: %s", fm->entries[fm->sel_index]);
+}
+
+static void ctx_cut(fileman_win_t* fm) {
+    if (fm->sel_index < 0 || fm->sel_index >= fm->entry_count) return;
+    fileman_get_path(fm, fm->entries[fm->sel_index], fm->clipboard_path, sizeof(fm->clipboard_path));
+    fm->clipboard_mode = 2;
+    snprintf(fm->status, sizeof(fm->status), "Cut: %s", fm->entries[fm->sel_index]);
+}
+
+static void ctx_paste(fileman_win_t* fm) {
+    if (fm->clipboard_mode == 0 || !fm->clipboard_path[0]) {
+        snprintf(fm->status, sizeof(fm->status), "Clipboard is empty");
+        return;
+    }
+    const char* basename = fm->clipboard_path;
+    for (int i = 0; fm->clipboard_path[i]; i++)
+        if (fm->clipboard_path[i] == '/') basename = &fm->clipboard_path[i] + 1;
+    char dst[256];
+    if (strcmp(fm->cwd, "/") == 0)
+        snprintf(dst, sizeof(dst), "/%s", basename);
+    else
+        snprintf(dst, sizeof(dst), "%s/%s", fm->cwd, basename);
+
+    if (fm->clipboard_mode == 1) {
+        if (vfs_cp(fm->clipboard_path, dst) == 0)
+            snprintf(fm->status, sizeof(fm->status), "Pasted: %s", basename);
+        else
+            snprintf(fm->status, sizeof(fm->status), "Paste failed");
+    } else if (fm->clipboard_mode == 2) {
+        vfs_rename(fm->clipboard_path, dst);
+        snprintf(fm->status, sizeof(fm->status), "Moved: %s", basename);
+        fm->clipboard_mode = 0;
+        fm->clipboard_path[0] = '\0';
+    }
+    fileman_refresh(fm);
+}
+
+static const char* ctx_items[] = {"Rename", "Copy", "Cut", "Paste", "---", "Delete", "New File", "New Folder"};
+#define CTX_ITEMS_COUNT (sizeof(ctx_items) / sizeof(ctx_items[0]))
+
+static void ctx_do_action(fileman_win_t* fm, int idx) {
+    fm->ctx_open = 0;
+    switch (idx) {
+        case 0: ctx_rename(fm); break;
+        case 1: ctx_copy(fm); break;
+        case 2: ctx_cut(fm); break;
+        case 3: ctx_paste(fm); break;
+        case 5: fileman_delete(fm); break;
+        case 6: fileman_new_file(fm); break;
+        case 7: fileman_new_folder(fm); break;
+    }
+}
+
 void fileman_new_file(fileman_win_t* fm) {
     fm->input_mode = 1;
     memset_asm(fm->input_buf, 0, sizeof(fm->input_buf));
@@ -203,9 +274,35 @@ void fileman_win_draw(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch) {
     } else {
         font_draw_string(cx + 4, status_y + (HEADER_H - char_h) / 2, fm->status, fb_rgb(180,180,180), fb_rgb(40,45,55));
     }
+
+    // Context menu
+    if (fm->ctx_open) {
+        int cmx = fm->ctx_x, cmy = fm->ctx_y;
+        int cmw = CTX_W, cmh = CTX_ITEM_H * CTX_ITEMS_COUNT + 4;
+        fb_fill_rect(cmx, cmy, cmw, cmh, fb_rgb(50,50,55));
+        fb_fill_rect(cmx, cmy, cmw, 1, fb_rgb(100,100,110));
+        fb_fill_rect(cmx, cmy + cmh - 1, cmw, 1, fb_rgb(100,100,110));
+        fb_fill_rect(cmx, cmy, 1, cmh, fb_rgb(100,100,110));
+        fb_fill_rect(cmx + cmw - 1, cmy, 1, cmh, fb_rgb(100,100,110));
+        for (uint32_t i = 0; i < CTX_ITEMS_COUNT; i++) {
+            int iy = cmy + 2 + i * CTX_ITEM_H;
+            uint32_t bg = ((int)i == fm->ctx_hover) ? fb_rgb(70,90,130) : fb_rgb(50,50,55);
+            if (ctx_items[i][0] == '-' && ctx_items[i][1] == '-') {
+                bg = fb_rgb(50,50,55);
+                fb_fill_rect(cmx + 4, iy + CTX_ITEM_H / 2, cmw - 8, 1, fb_rgb(80,80,90));
+                continue;
+            }
+            fb_fill_rect(cmx + 2, iy, cmw - 4, CTX_ITEM_H, bg);
+            // Disable paste if clipboard empty
+            if (i == 3 && (fm->clipboard_mode == 0 || !fm->clipboard_path[0]))
+                font_draw_string(cmx + 10, iy + 2, ctx_items[i], fb_rgb(100,100,100), bg);
+            else
+                font_draw_string(cmx + 10, iy + 2, ctx_items[i], fb_rgb(220,220,220), bg);
+        }
+    }
 }
 
-void fileman_win_click(window_t* win, int mx, int my) {
+void fileman_win_click(window_t* win, int mx, int my, int btn) {
     fileman_win_t* fm = (fileman_win_t*)win->reserved;
     if (!fm) return;
     int cx = win->x, cy = win->y + TITLE_H;
@@ -214,6 +311,49 @@ void fileman_win_click(window_t* win, int mx, int my) {
 
     if (fm->entry_count == 0) fileman_refresh(fm);
 
+    // Context menu handling (left-click closes menu or executes action)
+    if (btn == 1 && fm->ctx_open) {
+        int cmx = fm->ctx_x, cmy = fm->ctx_y;
+        int cmw = CTX_W, cmh = CTX_ITEM_H * CTX_ITEMS_COUNT + 4;
+        if (mx >= cmx && mx < cmx + cmw && my >= cmy && my < cmy + cmh) {
+            int idx = (my - cmy - 2) / CTX_ITEM_H;
+            if (idx >= 0 && idx < (int)CTX_ITEMS_COUNT && ctx_items[idx][0] != '-') {
+                ctx_do_action(fm, idx);
+            }
+        }
+        fm->ctx_open = 0;
+        return;
+    }
+
+    // Right-click: show context menu
+    if (btn == 2) {
+        fm->ctx_hover = -1;
+
+        // Check if click is in file list area
+        int list_header_y = cy + TOOLBAR_H + HEADER_H;
+        int list_y = list_header_y + char_h + 4;
+        int avail_h = (int)(ch - TOOLBAR_H - HEADER_H - char_h - 4 - HEADER_H - 4);
+        int max_rows = avail_h / (int)char_h;
+        if (max_rows < 1) max_rows = 1;
+
+        if (my >= list_y && my < list_y + max_rows * (int)char_h) {
+            int idx = (my - list_y) / (int)char_h + fm->scroll_offset;
+            if (idx >= 0 && idx < fm->entry_count) {
+                fm->sel_index = idx;
+            }
+        }
+
+        fm->ctx_open = 1;
+        fm->ctx_x = mx;
+        fm->ctx_y = my;
+        // Keep menu within window bounds
+        int cmw = CTX_W, cmh = CTX_ITEM_H * CTX_ITEMS_COUNT + 4;
+        if (fm->ctx_x + cmw > cx + (int)cw) fm->ctx_x = cx + (int)cw - cmw;
+        if (fm->ctx_y + cmh > cy + (int)ch) fm->ctx_y = cy + (int)ch - cmh;
+        return;
+    }
+
+    // Left-click: normal handling
     // Toolbar clicks
     int tb_y = cy;
     if (my >= tb_y && my < tb_y + TOOLBAR_H) {
@@ -355,13 +495,21 @@ void fileman_win_key(window_t* win, int key) {
         if (fm->input_pos > 0) {
             char path[256];
             fileman_get_path(fm, fm->input_buf, path, sizeof(path));
-            if (fm->input_mode == 2) {
+            if (fm->input_mode == 3) {
+                // Rename
+                char old_path[256];
+                fileman_get_path(fm, fm->entries[fm->sel_index], old_path, sizeof(old_path));
+                vfs_rename(old_path, path);
+                snprintf(fm->status, sizeof(fm->status), "Renamed to: %s", fm->input_buf);
+                fileman_refresh(fm);
+            } else if (fm->input_mode == 2) {
                 // Create directory
                 if (vfs_mkdir(path, 0) == 0) {
                     snprintf(fm->status, sizeof(fm->status), "Created folder: %s", fm->input_buf);
                 } else {
                     snprintf(fm->status, sizeof(fm->status), "Cannot create folder: %s", fm->input_buf);
                 }
+                fileman_refresh(fm);
             } else {
                 // Create file (empty)
                 int fd = vfs_open(path, 1, 0);
@@ -371,8 +519,8 @@ void fileman_win_key(window_t* win, int key) {
                 } else {
                     snprintf(fm->status, sizeof(fm->status), "Cannot create file: %s", fm->input_buf);
                 }
+                fileman_refresh(fm);
             }
-            fileman_refresh(fm);
         }
         fm->input_mode = 0;
         fm->input_buf[0] = '\0';
