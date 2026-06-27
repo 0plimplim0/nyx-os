@@ -749,9 +749,11 @@ static void cmd_exec(int argc, char** argv) {
         return;
     }
 
-    // Process is now in the scheduler. The scheduler will pick it up.
-    printf("Forked ELF process PID=%u\n", proc->pid);
+    // Directly switch to the user process (bypass scheduler wait)
+    printf("Switching to user process PID=%u...\n", proc->pid);
     kfree(copy);
+    switch_to_user_process(proc);
+    // Not reached
 }
 
 static uint32_t parse_ip(const char* s) {
@@ -1257,7 +1259,9 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
                     if (elf_validate(copy, init_size)) {
                         process_t* init_proc = NULL;
                         if (elf_load(copy, init_size, &init_proc) == 0) {
-                            printf("[INIT] Registered init PID=%u\n", init_proc->pid);
+                            printf("[INIT] Directly launching init PID=%u...\n", init_proc->pid);
+                            switch_to_user_process(init_proc);
+                            printf("[INIT] ERROR: switch_to_user_process returned!\n");
                         } else {
                             printf("[INIT] ELF load failed\n");
                         }

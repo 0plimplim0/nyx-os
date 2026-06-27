@@ -47,7 +47,7 @@ static void init_task_stack(process_t* proc, void* entry_point) {
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
 
-    proc->stack = (void*)((uintptr_t)sp + 112);
+    proc->stack = (void*)(uintptr_t)sp;
     proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
 }
 
@@ -71,7 +71,7 @@ static void init_user_task_stack(process_t* proc, void* entry_point, void* user_
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
 
-    proc->stack = (void*)((uintptr_t)sp + 112);
+    proc->stack = (void*)(uintptr_t)sp;
     proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
 }
 
@@ -117,10 +117,24 @@ process_t* create_user_process(const char* name, void* entry, void* user_stack, 
     return p;
 }
 
+extern void switch_to_user_trampoline(void);
+
 void switch_to_user_process(process_t* proc) {
     if (!proc || !proc->page_directory) return;
-    switch_page_directory(proc->page_directory);
     tss_set_stack((uint64_t)(uintptr_t)proc->kernel_stack + KERNEL_BASE);
+    uint64_t tramp = (uint64_t)switch_to_user_trampoline + KERNEL_BASE;
+    uint64_t rsp_val = (uint64_t)(uintptr_t)proc->stack;
+    uint64_t cr3_val = (uint64_t)proc->page_directory;
+    __asm__ volatile(
+        "cli \n"
+        "mov %%rdi, %0 \n"
+        "mov %%rsi, %1 \n"
+        "mov %%rax, %2 \n"
+        "call *%%rax \n"
+        :: "r"(rsp_val), "r"(cr3_val), "r"(tramp)
+        : "rdi", "rsi", "rax"
+    );
+    for (;;) __asm__ volatile("hlt");
 }
 
 void destroy_process(uint64_t pid) {

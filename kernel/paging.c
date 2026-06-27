@@ -88,7 +88,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         pt = (uint64_t*)(pde & ~0xFFF);
     }
 
-    pt[pt_idx] = (uint64_t)phys | PAGE_PRESENT | PAGE_WRITABLE | (flags & ~0xFFF);
+    pt[pt_idx] = (uint64_t)phys | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0) | (flags & PAGE_NX);
     __asm__ volatile("invlpg (%0)" :: "r"(virt) : "memory");
 }
 

@@ -236,3 +236,17 @@ irq_common:
     RESTORE_REGS
     add rsp, 16
     iretq
+
+; Trampoline for direct user process launch from kernel code
+; Called via higher-half address (indirect call through register)
+; rdi = proc->stack value (raw, identity-mapped → converted to higher-half)
+; rsi = proc->page_directory (physical address of user PML4)
+global switch_to_user_trampoline
+switch_to_user_trampoline:
+    mov rax, KERNEL_BASE
+    add rdi, rax            ; convert RSP to higher-half address
+    mov rsp, rdi            ; switch to user's kernel stack (higher-half)
+    mov cr3, rsi            ; switch to user page tables (physical)
+    RESTORE_REGS
+    add rsp, 16
+    iretq
