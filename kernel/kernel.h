@@ -43,8 +43,8 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "4.2.0"
-#define KERNEL_CODENAME "Nightfall"
+#define KERNEL_VERSION "5.0.0"
+#define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
 #define ARCH_X86 1

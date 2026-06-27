@@ -11,7 +11,7 @@
   </a>
   <img src="https://img.shields.io/badge/kernel-120%20KB-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/arch-x86__64-00ff9d?style=flat" />
-  <img src="https://img.shields.io/badge/status-v4.2.0-00ff9d?style=flat" />
+    <img src="https://img.shields.io/badge/status-v5.0.0-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/TCP-yes-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/GUI-window%20compositor-00ff9d?style=flat" />
   <a href="https://github.com/kazah-png/nyx-os/issues/1">
@@ -48,7 +48,7 @@ ______          \'/
     N Y X O S
     N I G H T F A L L
   -------------------------------------
-  Kernel:     NyxOS 4.2.0 (Nightfall)
+  Kernel:     NyxOS 5.0.0
   Arch:       x86_64 (long mode)
   Memory:     256 MB total, 240 MB free
   Heap:       16384 KB
