@@ -54,7 +54,11 @@ paint_win_t* paint_create_ctx(void) {
     init_preset_colors();
     paint_win_t* pw = (paint_win_t*)kmalloc(sizeof(paint_win_t));
     if (!pw) return NULL;
-    memset_asm(pw->canvas, 0xFF, sizeof(pw->canvas));
+    // Initialize with checkerboard background
+    for (int yy = 0; yy < PAINT_CANVAS_H; yy++)
+        for (int xx = 0; xx < PAINT_CANVAS_W; xx++)
+            pw->canvas[yy * PAINT_CANVAS_W + xx] = ((xx / 8) + (yy / 8)) & 1
+                ? fb_rgb(200,200,200) : fb_rgb(240,240,240);
     pw->brush_size = 4;
     pw->brush_color = fb_rgb(0,0,0);
     pw->drawing = 0;
@@ -107,17 +111,8 @@ void paint_win_draw(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch) {
     if (canvas_x < cx) canvas_x = cx;
     if (canvas_y < cy + CANVAS_OFFSET_Y) canvas_y = cy + CANVAS_OFFSET_Y;
 
-    // Checkerboard background for canvas
-    int check_size = 8;
-    for (int yy = 0; yy < PAINT_CANVAS_H; yy++) {
-        for (int xx = 0; xx < PAINT_CANVAS_W; xx++) {
-            int checker = ((xx / check_size) + (yy / check_size)) & 1;
-            uint32_t c = checker ? fb_rgb(200,200,200) : fb_rgb(240,240,240);
-            if (pw->canvas[yy * PAINT_CANVAS_W + xx] != 0xFFFFFFFF)
-                c = pw->canvas[yy * PAINT_CANVAS_W + xx];
-            fb_put_pixel(canvas_x + xx, canvas_y + yy, c);
-        }
-    }
+    // Blit canvas buffer (pre-rendered with checkerboard + brush strokes)
+    fb_blit(pw->canvas, 0, 0, PAINT_CANVAS_W, PAINT_CANVAS_H, canvas_x, canvas_y);
 
     // Canvas border
     fb_fill_rect(canvas_x - 1, canvas_y - 1, PAINT_CANVAS_W + 2, 1, fb_rgb(100,100,100));
@@ -167,7 +162,10 @@ void paint_win_click(window_t* win, int mx, int my, int btn) {
             // Clear button
             int clr_x = COLOR_START_X + PAINT_NUM_COLORS * (SWATCH_SIZE + SWATCH_PAD) + 10;
             if (rx >= clr_x && rx < clr_x + 60) {
-                memset_asm(pw->canvas, 0xFF, sizeof(pw->canvas));
+                for (int yy = 0; yy < PAINT_CANVAS_H; yy++)
+                    for (int xx = 0; xx < PAINT_CANVAS_W; xx++)
+                        pw->canvas[yy * PAINT_CANVAS_W + xx] = ((xx / 8) + (yy / 8)) & 1
+                            ? fb_rgb(200,200,200) : fb_rgb(240,240,240);
                 snprintf(pw->status, sizeof(pw->status), "Canvas cleared");
                 return;
             }
@@ -207,7 +205,10 @@ void paint_win_key(window_t* win, int key) {
             snprintf(pw->status, sizeof(pw->status), "Brush: %dpx", pw->brush_size);
         }
     } else if (key == 'c' || key == 'C') {
-        memset_asm(pw->canvas, 0xFF, sizeof(pw->canvas));
+        for (int yy = 0; yy < PAINT_CANVAS_H; yy++)
+            for (int xx = 0; xx < PAINT_CANVAS_W; xx++)
+                pw->canvas[yy * PAINT_CANVAS_W + xx] = ((xx / 8) + (yy / 8)) & 1
+                    ? fb_rgb(200,200,200) : fb_rgb(240,240,240);
         snprintf(pw->status, sizeof(pw->status), "Canvas cleared");
     }
 }
