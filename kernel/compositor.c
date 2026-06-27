@@ -436,25 +436,32 @@ static void draw_background(void) {
     uint32_t band_h = fh / steps;
     for (uint32_t i = 0; i < steps; i++) {
         uint32_t t = i * 255 / steps;
-        uint8_t r = 40 + t * 2 / 64;
-        uint8_t g = 50 + t * 3 / 64;
-        uint8_t b = 90 + t * 4 / 64;
-        if (r > 100) r = 100;
-        if (g > 120) g = 120;
-        if (b > 200) b = 200;
+        uint8_t r = 50 + t * 90 / 255;
+        uint8_t g = 100 + t * 80 / 255;
+        uint8_t b = 180 + t * 40 / 255;
+        if (r > 160) r = 160;
+        if (g > 200) g = 200;
+        if (b > 240) b = 240;
         fb_fill_rect(0, i * band_h, fw, band_h + 1, fb_rgb(r, g, b));
     }
-    uint32_t glow_h = fh / 8;
+    uint32_t glow_h = fh / 6;
     uint32_t glow_start = fh - glow_h;
     for (uint32_t i = 0; i < glow_h; i++) {
         uint32_t a = i * 255 / glow_h;
-        uint8_t r = 40 + a * 20 / 255;
-        uint8_t g = 50 + a * 30 / 255;
-        uint8_t b = 100 + a * 60 / 255;
-        if (r > 100) r = 100;
-        if (g > 120) g = 120;
-        if (b > 220) b = 220;
+        uint8_t r = 50 + a * 100 / 255;
+        uint8_t g = 100 + a * 100 / 255;
+        uint8_t b = 200 + a * 40 / 255;
+        if (r > 200) r = 200;
+        if (g > 220) g = 220;
+        if (b > 255) b = 255;
         fb_fill_rect(0, glow_start + i, fw, 1, fb_rgb(r, g, b));
+    }
+    // Ground/grass strip at very bottom
+    uint32_t grass_h = fh / 12;
+    for (uint32_t i = 0; i < grass_h; i++) {
+        uint8_t g = 100 + i * 60 / grass_h;
+        if (g > 180) g = 180;
+        fb_fill_rect(0, fh - grass_h + i, fw, 1, fb_rgb(30, g, 40));
     }
 }
 
@@ -929,17 +936,26 @@ static void draw_icon_at(int i) {
     fb_fill_rect(x, y, ICON_SIZE, ICON_SIZE, hl ? fb_rgb(65,70,95) : fb_rgb(45,50,65));
     fb_fill_rect(x+1, y+1, ICON_SIZE-2, ICON_SIZE-2, hl ? fb_rgb(75,80,105) : fb_rgb(55,60,75));
     uint32_t icon_color[] = {
-        fb_rgb(70,130,200), fb_rgb(0,200,0), fb_rgb(200,50,50),
-        fb_rgb(200,200,50), fb_rgb(100,200,100), fb_rgb(200,100,200)
+        fb_rgb(70,160,230), fb_rgb(0,220,0), fb_rgb(230,60,60),
+        fb_rgb(220,220,50), fb_rgb(100,220,100), fb_rgb(220,100,220)
     };
-    fb_fill_rect(x+12, y+8, ICON_SIZE-24, ICON_SIZE-24, icon_color[i % 6]);
-    fb_fill_rect(x+18, y+14, ICON_SIZE-36, 3, fb_rgb(255,255,255));
-    fb_fill_rect(x+18, y+22, ICON_SIZE-36, 3, fb_rgb(255,255,255));
-    fb_fill_rect(x+18, y+30, ICON_SIZE-36, 3, fb_rgb(255,255,255));
+    // Icon background (rounded square)
+    fb_fill_rect(x+8, y+6, ICON_SIZE-16, ICON_SIZE-16, icon_color[i % 6]);
+    // Subtle inner highlight
+    uint32_t hi = fb_rgb(255,255,255);
+    fb_fill_rect(x+12, y+10, ICON_SIZE-24, 2, hi);
+    // Content lines inside icon
+    fb_fill_rect(x+16, y+18, ICON_SIZE-32, 3, fb_rgb(255,255,255));
+    fb_fill_rect(x+16, y+26, ICON_SIZE-32, 3, fb_rgb(255,255,255));
+    fb_fill_rect(x+16, y+34, ICON_SIZE-32, 3, fb_rgb(255,255,255));
+    // Label background for readability
     int tw = strlen(desktop_icon_names[i]) * 8;
     int tx = x + (ICON_SIZE - tw) / 2;
     if (tx < 0) tx = 0;
-    font_draw_string(tx, y + ICON_SIZE + 2, desktop_icon_names[i], fb_rgb(220,220,220), fb_rgb(30,35,50));
+    uint32_t lw = tw + 8;
+    if (lw > ICON_SIZE + 8) lw = ICON_SIZE + 8;
+    fb_fill_rect(tx - 2, y + ICON_SIZE + 1, lw, FONT_HEIGHT + 2, fb_rgb(20,25,35));
+    font_draw_string(tx, y + ICON_SIZE + 3, desktop_icon_names[i], fb_rgb(230,230,230), fb_rgb(20,25,35));
 }
 
 static void draw_desktop_icons(void) {
