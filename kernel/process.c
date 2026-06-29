@@ -127,9 +127,9 @@ void switch_to_user_process(process_t* proc) {
     uint64_t cr3_val = (uint64_t)proc->page_directory;
     __asm__ volatile(
         "cli \n"
-        "mov %%rdi, %0 \n"
-        "mov %%rsi, %1 \n"
-        "mov %%rax, %2 \n"
+        "mov %0, %%rdi \n"
+        "mov %1, %%rsi \n"
+        "mov %2, %%rax \n"
         "call *%%rax \n"
         :: "r"(rsp_val), "r"(cr3_val), "r"(tramp)
         : "rdi", "rsi", "rax"
