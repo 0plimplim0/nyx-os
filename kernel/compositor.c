@@ -1033,7 +1033,6 @@ void compositor_run(void) {
     draw_cursor(mouse_x, mouse_y);
     int redraw = 0;
     uint32_t clock_tick = 0;
-
     while (!quit) {
         kernel_poll_net();
         run_background_tasks();

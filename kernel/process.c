@@ -47,7 +47,7 @@ static void init_task_stack(process_t* proc, void* entry_point) {
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
 
-    proc->stack = (void*)(uintptr_t)sp;
+    proc->stack = (void*)((uintptr_t)sp);
     proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
 }
 
@@ -185,7 +185,11 @@ void irq_scheduler_tick(void) {
 
     process_t* current = process_table[current_idx];
     if (current) {
-        current->stack = (void*)(uintptr_t)saved_rsp;
+        // saved_rsp may be identity-mapped (kernel stack) or higher-half (ring 3 kernel stack via TSS)
+        // Always store as identity-mapped so that +KERNEL_BASE restore is correct
+        uint64_t rsp_val = saved_rsp;
+        if (rsp_val > 0xFFFFFFFFULL) rsp_val -= KERNEL_BASE;
+        current->stack = (void*)(uintptr_t)rsp_val;
     }
 
     int next = current_idx;

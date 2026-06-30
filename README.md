@@ -449,6 +449,10 @@ See the full **[NyxOS Status Report](https://github.com/kazah-png/nyx-os/issues/
 - ✅ Real-time clock (RTC) driver with wall-clock time display
 - ✅ Desktop polish (wallpaper, right-click context menu, Settings window, File Manager toolbar)
 
+### Known issues
+- ⚠️ **Boot instability:** the kernel boots to the GUI desktop and runs for ~30–60 seconds, then triple-faults (QEMU window closes). The crash occurs spontaneously without user interaction. Root cause suspected in the scheduler's `saved_rsp`/`next_rsp` handling during process context switches. A partial fix addresses double-`KERNEL_BASE` corruption of ring-3 kernel stacks, but the system is not yet fully stable.
+- ⚠️ **User process scheduling:** init.elf (ring 3 user process) is loaded but never runs in practice — the scheduler always picks the placeholder init process (has no stack), which prevents any actual process switch. Removing init from the rotation causes an immediate crash when switching to the user process.
+
 ### What's being built
 - 🔄 Drag-reorder desktop icons
 - 🔄 Right-click context menu in File Manager (rename, copy, paste)
