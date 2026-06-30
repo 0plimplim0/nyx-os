@@ -1039,7 +1039,6 @@ void compositor_run(void) {
         run_background_tasks();
 
         int k = getkey_poll();
-        if (k == 0x1B) { quit = 1; break; }
 
         int mx = mouse_get_x();
         int my = mouse_get_y();
