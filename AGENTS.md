@@ -35,7 +35,8 @@ Evolve NyxOS into a functional x86_64 kernel with filesystem, networking, shell,
 | v5.0.0 | Full GUI application suite: Text Editor (file open/save, cursor nav), Image Viewer (test pattern, zoom/pan), Sound Test (PC speaker + SB16 sine/square/sweep). Brighter wallpaper gradient (sky-blue + grass). 8 desktop icons. **All placeholders replaced with real apps.** No crashes, zero warnings in build. |
 | v5.1.0 | Stability and bugfix release: TSS struct alignment fix (IST pointers shifted 4 bytes early → triple fault on double fault/NMI), GDT limit correction, APIC/PIC IRQ masking fix (PIC left fully masked when APIC active), switch_to_user_process inline asm operand reversal fix, VGA 8x16 font data corruption fix (marker bytes inserted in each glyph → garbage text in GUI). QEMU display changed to sdl for Windows compatibility. |
 | v5.3.0 | Login system: boot animation (~5s, NyxOS-themed, 23-step progress bar), credential storage on EXT2 (/etc/passwd), framebuffer login screen with keyboard input, default user nyx/nyx, fallback when no EXT2 disk, login failure → reboot, success → launch desktop. |
-| v5.4.0 | Audit/hardening pass: fixed clean-build break (`sha256.h` pulled host `<stdint.h>`, conflicting with kernel int types); build is warning-free again (0 warnings from ~160 — pointer-truncation casts routed through `uintptr_t`, keyboard keymap over-initializers trimmed, dead code removed). **Security:** ring-3 syscall boundary hardened — user pointers validated against the canonical user half, and userspace now gets small integer fds via a translation table instead of raw (forgeable) kernel VFS handles (closed an info-leak + arbitrary-kernel-r/w reachable via `exec`). **Bugfix:** enabled EFER.SCE — `syscall` was raising #UD in ring 3 (root cause of user-process crash-on-entry). Panic handler now prints faulting RIP/CS/ring/error. |
+| v5.4.0 | Audit/hardening pass: fixed clean-build break (`sha256.h` pulled host `<stdint.h>`, conflicting with kernel int types); build is warning-free again (0 warnings from ~160 — pointer-truncation casts routed through `uintptr_t`, keyboard keymap over-initializers trimmed, dead code removed). **Security:** ring-3 syscall boundary hardened — user pointers validated against the canonical user half, and userspace now gets small integer fds via a translation table instead of raw (forgeable) kernel VFS handles (closed an info-leak + arbitrary-kernel-r/w reachable via `exec`). Panic handler now prints faulting RIP/CS/ring/error. |
+| v5.5.0 | **Ring-3 userspace now actually runs.** `exec <elf>` loads an ELF64, enters ring 3, services syscalls, and returns to the shell on exit. Fixed the full chain: (1) EFER.SCE was never enabled → `syscall` #UD'd; (2) LSTAR pointed at the low link address, unmapped under the user CR3 → set it to the PML4[511] higher-half alias; (3) `syscall_entry` clobbered RAX/RBX (and truncated user RSP) *before* SAVE_REGS — rewrote it to save all user GPRs first using RIP-relative ops (no scratch reg), with `kernel_rsp` stored as a higher-half alias; (4) added `copy_from_user`/`copy_to_user` that walk the user page tables to physical (masking bits 51:12 — `~0xFFF` alone kept the NX bit and produced non-canonical → #GP); (5) return via `iretq` (NASM's bare `sysret` is the 32-bit form and truncates RSP); (6) `switch_to_user_process` uses a small setjmp/longjmp (`ku_setjmp`/`ku_longjmp`) so exit() unwinds to the caller instead of halting. Verified: init.elf prints, getpid/malloc(sbrk)/snprintf/write/exit all work, control returns to boot. |
 
 ## Architecture
 ### Boot flow
@@ -194,17 +195,17 @@ kernel/
 - **Keyboard buffer exposed**: `kbd_buffer`, `kbd_head`, `kbd_tail` made non-static in `keyboard.c` for direct polling from login.c.
 
 ## Next features to add
-- **Finish the ring-3 syscall path** (biggest functionality gap). Status after v5.4.0:
-  `exec <elf>` now reaches ring 3 and executes (EFER.SCE fixed), but the first
-  pointer-passing syscall hangs. Root cause: `syscall_entry` (isr_stubs.asm)
-  switches to kernel CR3, then `syscall_handler` dereferences the user buffer
-  (e.g. SYS_WRITE `buf`, SYS_PRINT string) which is not mapped under kernel CR3.
-  Fix options: (a) copy_from_user/copy_to_user helpers that read user memory
-  while still on the user CR3 before switching, or map the user page, or
-  (b) don't switch CR3 in syscall_entry (user PML4 already mirrors the kernel
-  higher half via PML4[511], so kernel code/data is reachable without a switch —
-  verify no low-identity-only accesses first). Debug with the new panic output
-  (RIP/CS/ring) and `qemu -d int,cpu_reset`.
+- **Userspace polish** (ring-3 now works as of v5.5.0):
+  - `exec` leaks the `process_t`/page-dir/stack on exit — add `destroy_process`
+    cleanup after `return_from_user_process` returns (careful: don't free the
+    stack still in use during the longjmp; free from the caller after return).
+  - `vfs_read` ignores file offset (re-reads from start each call); the syscall
+    layer caps reads at one 4 KB `kmalloc` bounce. Add per-fd offsets for real
+    streaming reads.
+  - `copy_from_user`/`copy_to_user` assume user physical pages fall in the 64 MB
+    identity map; fine for small programs, revisit if RAM use grows.
+  - Only one user process runs at a time (`switch_to_user_process` is blocking).
+    Real concurrency needs the preemptive scheduler (below).
 - File Manager: copy/paste, drag-and-drop files
 - Network: DNS resolver, HTTP client library
 - SMP (multi-core) bringup via APIC IPI

@@ -8,6 +8,8 @@ void init_syscalls(void) {
 }
 
 static process_t* get_cur_proc(void) {
+    extern process_t* g_user_proc;
+    if (g_user_proc) return g_user_proc;
     extern process_t* get_current_process(void);
     return get_current_process();
 }
@@ -23,8 +25,11 @@ void setup_syscall_msrs(void) {
     uint64_t star = ((uint64_t)USER_CS << 48) | ((uint64_t)KERNEL_CS << 32);
     write_msr(MSR_STAR, star);
 
-    // LSTAR: RIP of syscall entry point
-    write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
+    // LSTAR: RIP of syscall entry point. Must be the higher-half alias — a
+    // ring-3 `syscall` runs under the user CR3, which maps kernel code only via
+    // the PML4[511] mirror (KERNEL_BASE), not at its low link address. (The IDT
+    // gates use the same +KERNEL_BASE aliasing for interrupts from ring 3.)
+    write_msr(MSR_LSTAR, (uint64_t)syscall_entry + KERNEL_BASE);
 
     // SF_MASK: clear IF (bit 9) and DF (bit 10) during syscall
     write_msr(MSR_SF_MASK, (1 << 9) | (1 << 10));
@@ -87,6 +92,75 @@ static void ufd_release(int ufd) {
     if (i >= 0 && i < UFD_MAX) ufd_inuse[i] = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/*  User memory access                                                */
+/* ------------------------------------------------------------------ */
+/* The handler runs on the kernel CR3, where user pages are NOT mapped. To touch
+ * a user buffer we translate its virtual address through the user page tables
+ * (whose table pages are identity-mapped physical memory) and access the
+ * resulting physical page via the kernel's identity map. `user_cr3` is saved by
+ * syscall_entry for the process that trapped. */
+extern uint64_t user_cr3;
+
+/* Physical-frame masks (bits 51:12 / 51:21 / 51:30). Must exclude bit 63 (NX)
+ * and the low flag bits — masking with ~0xFFF alone keeps NX, producing a
+ * non-canonical address that faults (#GP) when dereferenced. */
+#define PT_ADDR_4K 0x000FFFFFFFFFF000ULL
+#define PT_ADDR_2M 0x000FFFFFFFE00000ULL
+#define PT_ADDR_1G 0x000FFFFFC0000000ULL
+
+static uint64_t user_v2p(uint64_t vaddr) {
+    if (!user_cr3) return 0;
+    uint64_t* pml4 = (uint64_t*)(user_cr3 & PT_ADDR_4K);
+    uint64_t e = pml4[(vaddr >> 39) & 0x1FF];
+    if (!(e & 1)) return 0;
+    uint64_t* pdpt = (uint64_t*)(e & PT_ADDR_4K);
+    e = pdpt[(vaddr >> 30) & 0x1FF];
+    if (!(e & 1)) return 0;
+    if (e & 0x80) return (e & PT_ADDR_1G) + (vaddr & 0x3FFFFFFFULL);
+    uint64_t* pd = (uint64_t*)(e & PT_ADDR_4K);
+    e = pd[(vaddr >> 21) & 0x1FF];
+    if (!(e & 1)) return 0;
+    if (e & 0x80) return (e & PT_ADDR_2M) + (vaddr & 0x1FFFFFULL);
+    uint64_t* pt = (uint64_t*)(e & PT_ADDR_4K);
+    e = pt[(vaddr >> 12) & 0x1FF];
+    if (!(e & 1)) return 0;
+    return (e & PT_ADDR_4K) + (vaddr & 0xFFFULL);
+}
+
+static int copy_from_user(void* dst, uint64_t usrc, uint64_t len) {
+    uint8_t* d = (uint8_t*)dst;
+    for (uint64_t i = 0; i < len; i++) {
+        uint64_t p = user_v2p(usrc + i);
+        if (!p) return -1;
+        d[i] = *(volatile uint8_t*)p;
+    }
+    return 0;
+}
+
+static int copy_to_user(uint64_t udst, const void* src, uint64_t len) {
+    const uint8_t* s = (const uint8_t*)src;
+    for (uint64_t i = 0; i < len; i++) {
+        uint64_t p = user_v2p(udst + i);
+        if (!p) return -1;
+        *(volatile uint8_t*)p = s[i];
+    }
+    return 0;
+}
+
+/* Copy a NUL-terminated user string into a kernel buffer (always terminated). */
+static int copy_str_from_user(char* dst, uint64_t usrc, uint64_t maxlen) {
+    for (uint64_t i = 0; i < maxlen; i++) {
+        uint64_t p = user_v2p(usrc + i);
+        if (!p) { dst[i ? i - 1 : 0] = '\0'; return -1; }
+        char c = *(volatile char*)p;
+        dst[i] = c;
+        if (c == '\0') return 0;
+    }
+    dst[maxlen - 1] = '\0';
+    return 0;
+}
+
 uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5) {
     (void)a4; (void)a5;
     switch (no) {
@@ -94,27 +168,41 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
             printf("[USER] exit(%lu)\n", a1);
             process_t* cur = get_cur_proc();
             if (cur) cur->state = 0;
-            for (;;) __asm__ volatile("hlt");
+            // Unwind back to whoever launched this process (e.g. the shell's exec),
+            // re-enabling interrupts there, instead of halting the whole system.
+            extern void return_from_user_process(void);
+            return_from_user_process();
+            for (;;) __asm__ volatile("hlt");   // unreachable
             return 0;
         }
         case SYS_WRITE: {
             int fd = (int)a1;
-            const char* buf = (const char*)a2;
             int len = (int)a3;
             if (len < 0 || !user_ptr_ok(a2, (uint64_t)len)) return -1;
             if (fd == 1 || fd == 2) {
-                for (int i = 0; i < len; i++) putchar(buf[i]);
+                char kbuf[128];
+                int done = 0;
+                while (done < len) {
+                    int chunk = len - done;
+                    if (chunk > (int)sizeof(kbuf)) chunk = sizeof(kbuf);
+                    if (copy_from_user(kbuf, a2 + done, chunk) != 0) return done;
+                    for (int i = 0; i < chunk; i++) putchar(kbuf[i]);
+                    done += chunk;
+                }
             }
             return len;
         }
         case SYS_PRINT: {
             if (!user_str_ok(a1)) return -1;
-            printf("%s", (const char*)a1);
+            char kbuf[512];
+            if (copy_str_from_user(kbuf, a1, sizeof(kbuf)) != 0) return -1;
+            printf("%s", kbuf);
             return 0;
         }
         case SYS_OPEN: {
             if (!user_str_ok(a1)) return -1;
-            const char* path = (const char*)a1;
+            char path[128];
+            if (copy_str_from_user(path, a1, sizeof(path)) != 0) return -1;
             int flags = (int)a2;
             int mode = (int)a3;
             int internal = vfs_open(path, flags, mode);
@@ -128,7 +216,13 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
             if (ufd_lookup((int)a1, &internal) != 0) return -1;
             int count = (int)a3;
             if (count < 0 || !user_ptr_ok(a2, (uint64_t)count)) return -1;
-            return vfs_read(internal, (void*)a2, count);
+            if (count > 4096) count = 4096;
+            char* kbuf = (char*)kmalloc(count);
+            if (!kbuf) return -1;
+            int n = vfs_read(internal, kbuf, count);
+            if (n > 0 && copy_to_user(a2, kbuf, n) != 0) n = -1;
+            kfree(kbuf);
+            return n;
         }
         case SYS_CLOSE: {
             int internal;
@@ -167,7 +261,8 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
         }
         case SYS_EXEC: {
             if (!user_str_ok(a1)) return -1;
-            const char* path = (const char*)a1;
+            char path[128];
+            if (copy_str_from_user(path, a1, sizeof(path)) != 0) return -1;
             int fd = vfs_open(path, 0, 0);      /* kernel-side handle, never exposed */
             if (fd < 0) return -1;
             uint32_t size = vfs_fsize(fd);

@@ -147,56 +147,54 @@ kernel_rsp: dq 0
 user_cr3:  dq 0
 
 section .text
+; Entry: rax=syscall#, rdi/rsi/rdx/r10/r8/r9=args, rcx=user RIP, r11=user RFLAGS,
+; rsp=USER stack, CR3=USER. Interrupts are masked (SF_MASK clears IF).
+; LSTAR is the higher-half alias of this label, so RIP is in the higher half and
+; every `default rel` memory access resolves to the higher-half alias of our
+; .data — which the user CR3 maps via PML4[511]. That lets us stash RSP and save
+; all user GPRs onto the kernel stack with NO scratch register, before touching
+; CR3. (The previous version clobbered RAX/RBX during the CR3 switch *before*
+; SAVE_REGS, corrupting the syscall number and the user's RBX/RSP.)
 syscall_entry:
-    ; Save user CR3 and RSP before switching to kernel page tables
-    ; User CR3 maps higher half via PML4[256], so use higher-half addressing
+    mov [user_rsp], rsp          ; stash user RSP (higher-half alias, mapped in user CR3)
+    mov rsp, [kernel_rsp]        ; switch to kernel stack (stored as a higher-half alias)
+    push rcx                     ; user return RIP
+    push r11                     ; user RFLAGS
+    SAVE_REGS                    ; save all 15 user GPRs intact — nothing clobbered yet
 
-    mov rax, user_cr3
-    mov rbx, KERNEL_BASE
-    add rax, rbx
-    mov rbx, cr3
-    mov [rax], rbx
+    ; All user state is now on the (higher-half) kernel stack; rax/rbx are free.
+    mov rax, cr3
+    mov [user_cr3], rax          ; save user CR3
+    mov rax, [kernel_pml4_phys]
+    mov cr3, rax                 ; -> kernel CR3 (higher-half stack still mapped via 511)
 
-    mov rax, user_rsp
-    mov rbx, KERNEL_BASE
-    add rax, rbx
-    mov [rax], rsp
-
-    ; Switch to kernel page tables
-    mov rax, kernel_pml4_phys
-    mov rbx, KERNEL_BASE
-    add rax, rbx
-    mov rax, [rax]
-    mov cr3, rax
-
-    ; Switch to kernel stack (identity address, now accessible)
-    mov rsp, [kernel_rsp]
-    push rcx                     ; return RIP
-    push r11                     ; return RFLAGS
-    SAVE_REGS
-    ; Stack: [RSP+0..112]=regs, [RSP+120]=RFLAGS, [RSP+128]=RIP
-    mov rdi, [rsp + 112]        ; RAX = syscall number
-    mov rsi, [rsp + 72]         ; RDI = arg1
-    mov rdx, [rsp + 80]         ; RSI = arg2
-    mov rcx, [rsp + 88]         ; RDX = arg3
-    mov r8,  [rsp + 40]         ; R10 = arg4
-    mov r9,  [rsp + 56]         ; R8  = arg5
+    ; Marshal saved user regs into SysV C argument registers.
+    ; Stack: [RSP+0..112]=GPRs (r15..rax), [RSP+120]=RFLAGS, [RSP+128]=RIP
+    mov rdi, [rsp + 112]         ; RAX = syscall number
+    mov rsi, [rsp + 72]          ; RDI = arg1
+    mov rdx, [rsp + 80]          ; RSI = arg2
+    mov rcx, [rsp + 88]          ; RDX = arg3
+    mov r8,  [rsp + 40]          ; R10 = arg4
+    mov r9,  [rsp + 56]          ; R8  = arg5
     call syscall_handler
-    mov [rsp + 112], rax        ; save return value in saved RAX slot
-    RESTORE_REGS
-    pop r11                      ; restore RFLAGS
-    pop rcx                      ; restore return RIP
-    ; Switch back to user page tables
-    mov rax, user_cr3
-    mov rbx, KERNEL_BASE
-    add rax, rbx
-    mov rax, [rax]
+    mov [rsp + 112], rax         ; return value -> saved RAX slot
+
+    ; Return: back to user CR3 first (higher-half stack stays mapped), then restore.
+    mov rax, [user_cr3]
     mov cr3, rax
-    mov rax, user_rsp
-    mov rbx, KERNEL_BASE
-    add rax, rbx
-    mov rsp, [rax]
-    sysret
+    RESTORE_REGS                 ; restore user GPRs (RAX = return value)
+    pop r11                      ; user RFLAGS
+    pop rcx                      ; user RIP
+    ; Return to ring 3 via iretq (NASM's bare `sysret` is the 32-bit form — it
+    ; drops to compat mode and truncates RSP to 32 bits; iretq is what
+    ; switch_to_user_process already uses to enter ring 3, with no STAR/GDT
+    ; selector-ordering constraints). Build the iret frame: SS, RSP, RFLAGS, CS, RIP.
+    push 0x23                    ; user SS (USER_DS, RPL 3)
+    push qword [user_rsp]        ; user RSP
+    push r11                     ; RFLAGS
+    push 0x1B                    ; user CS (USER_CS, RPL 3)
+    push rcx                     ; user RIP
+    iretq
 
 ; IRQ stubs (mapped to INT 32-47)
 %macro IRQ 2

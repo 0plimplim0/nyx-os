@@ -1305,7 +1305,9 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
     bootsplash_update(7, 23, "Allocating syscall stack...");
     void* syscall_stack = kmalloc(4096);
     if (syscall_stack) {
-        set_kernel_rsp((uint64_t)syscall_stack + 4096);
+        // Store the higher-half alias: syscall_entry runs on the user CR3 until it
+        // switches, and only the PML4[511] mirror is mapped there — not low identity.
+        set_kernel_rsp((uint64_t)syscall_stack + 4096 + KERNEL_BASE);
     }
     printf("[INIT] Virtual File System...\n"); init_vfs();
     bootsplash_update(8, 23, "Mounting virtual file system...");

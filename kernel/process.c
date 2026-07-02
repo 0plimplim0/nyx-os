@@ -126,9 +126,36 @@ process_t* create_user_process(const char* name, void* entry, void* user_stack, 
 }
 
 extern void switch_to_user_trampoline(void);
+extern uint64_t ku_setjmp(uint64_t* buf);
+extern void ku_longjmp(uint64_t* buf, uint64_t val);
+
+// The user process currently executing in ring 3 (launched via switch_to_user_process).
+// The cooperative scheduler doesn't advance current_idx for these, so syscall handlers
+// use this to resolve getpid()/sbrk()/exit() to the right process.
+process_t* g_user_proc = NULL;
+
+// Saved kernel context so a user exit() can unwind back to the caller (the shell's
+// `exec`) instead of halting the whole system.
+static uint64_t user_return_ctx[8];
+
+// Called from the SYS_EXIT handler to return control to switch_to_user_process's caller.
+void return_from_user_process(void) {
+    ku_longjmp(user_return_ctx, 1);
+    for (;;) __asm__ volatile("hlt");   // unreachable
+}
 
 void switch_to_user_process(process_t* proc) {
     if (!proc || !proc->page_directory) return;
+
+    // Save a return point. When the user process exits, the SYS_EXIT handler calls
+    // return_from_user_process(), which longjmps back here with a non-zero result.
+    if (ku_setjmp(user_return_ctx) != 0) {
+        g_user_proc = NULL;
+        __asm__ volatile("sti");        // re-enable interrupts for the caller (shell)
+        return;
+    }
+
+    g_user_proc = proc;
     tss_set_stack((uint64_t)(uintptr_t)proc->kernel_stack + KERNEL_BASE);
     uint64_t tramp = (uint64_t)switch_to_user_trampoline + KERNEL_BASE;
     uint64_t rsp_val = (uint64_t)(uintptr_t)proc->stack;
