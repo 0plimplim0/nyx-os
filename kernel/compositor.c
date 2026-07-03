@@ -531,6 +531,7 @@ static void do_start_menu_action(int idx) {
                         fwin->on_click = fileman_win_click;
                         fwin->on_key = fileman_win_key;
                         fwin->on_mousemove = fileman_win_mousemove;
+                        fileman_refresh((fileman_win_t*)fwin->reserved);
                     }
                 }
             }
@@ -814,7 +815,7 @@ static void about_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t c
     font_draw_string(cx + 10, cy + 10, "NyxOS Desktop", fb_rgb(100,200,100), fb_rgb(35,35,40));
     font_draw_string(cx + 10, cy + 30, "Version 0.2.0", fb_rgb(200,200,200), fb_rgb(35,35,40));
     font_draw_string(cx + 10, cy + 60, "A lightweight desktop OS", fb_rgb(160,160,160), fb_rgb(35,35,40));
-    font_draw_string(cx + 10, cy + 80, "inspired by Linux Mint.", fb_rgb(160,160,160), fb_rgb(35,35,40));
+    font_draw_string(cx + 10, cy + 80, "NyxOS Nightfall", fb_rgb(160,160,160), fb_rgb(35,35,40));
 }
 
 enum { SETTINGS_TAB_INFO, SETTINGS_TAB_DISPLAY, SETTINGS_TAB_KEYBOARD };
@@ -1322,24 +1323,12 @@ void compositor_run(void) {
                 }
             }
         } else {
-            // Keyboard shortcuts (workspace switching) — NOT routed to windows
-            if (k >= '1' && k <= '4') {
+            // Ctrl+1..4: workspace switching
+            if (is_ctrl_pressed() && k >= '1' && k <= '4') {
                 current_workspace = k - '1';
                 redraw = 1;
                 goto done_click;
             }
-
-            // Arrow keys to move cursor (for debugging)
-            if (k == 'w' || k == 'W') my -= 8;
-            if (k == 's' || k == 'S') my += 8;
-            if (k == 'a' || k == 'A') mx -= 8;
-            if (k == 'd' || k == 'D') mx += 8;
-            if (mx < 0) mx = 0;
-            if (mx >= (int)fw) mx = fw - 1;
-            if (my < 0) my = 0;
-            if (my >= (int)fh) my = fh - 1;
-            // Sync WASD changes back to hardware so next loop iteration doesn't overwrite them
-            mouse_set_pos(mx, my);
 
             // Route all keys to focused window's key handler
             window_t* fwin = find_window(focused_id);
@@ -1380,7 +1369,7 @@ done_click:
 
         save_cursor_bg(mouse_x, mouse_y);
         draw_cursor(mouse_x, mouse_y);
-        for (int d = 0; d < 2000000; d++) __asm__ volatile("pause");
+        for (int d = 0; d < 100000; d++) __asm__ volatile("pause");
     }
 
     for (int i = 0; i < MAX_WINDOWS; i++)

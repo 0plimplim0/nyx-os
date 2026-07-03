@@ -19,7 +19,7 @@ editor_win_t* editor_create_ctx(void) {
 }
 
 static void editor_save(editor_win_t* ed) {
-    char* filename = ed->filename[0] ? ed->filename : "untitled.txt";
+    char* filename = ed->filename[0] ? ed->filename : "/home/user/untitled.txt";
     char buf[EDITOR_MAX_LINES * EDITOR_LINE_LEN];
     int pos = 0;
     for (int i = 0; i < ed->line_count && pos < (int)sizeof(buf) - 2; i++) {

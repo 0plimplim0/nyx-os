@@ -19,6 +19,7 @@ typedef struct vfs_node {
     struct vfs_node* parent;
     struct vfs_node* children[MAX_CHILDREN];
     uint32_t child_count;
+    uint32_t readdir_idx;  // per-directory readdir cursor
 } vfs_node_t;
 
 static vfs_node_t nodes[MAX_INODES];
@@ -127,7 +128,7 @@ void init_vfs(void) {
     root->parent = root;
     current_dir = root;
 
-    // Create some default entries
+    // Default directories:
     vfs_mkdir("/home", 0755);
     vfs_mkdir("/home/user", 0755);
     vfs_mkdir("/tmp", 0755);
@@ -139,12 +140,18 @@ void init_vfs(void) {
     vfs_mkdir("/proc", 0755);
     vfs_mkdir("/sys", 0755);
 
-    // Create welcome file
+    // Create a welcome file
     int fd = vfs_open("/home/user/welcome.txt", 1, 0644);
-    if (fd >= 0) {
-        vfs_write(fd, "Welcome to NyxOS v1.0.0\n", 24);
-        vfs_write(fd, "Type 'help' for commands.\n", 26);
-        vfs_close(fd);
+    vfs_write(fd, "Welcome to NyxOS v1.0.0\n", 24);
+    vfs_write(fd, "Type 'help' for commands.\n", 26);
+    vfs_close(fd);
+    
+    // Debug: print VFS tree
+    serial_puts("[VFS] Root children:\n");
+    for (uint32_t i = 0; i < root->child_count; i++) {
+        serial_puts("  ");
+        serial_puts(root->children[i]->name);
+        serial_puts(root->children[i]->type ? " (dir)\n" : " (file)\n");
     }
 }
 
@@ -152,7 +159,7 @@ int vfs_open(const char* path, int flags, mode_t mode) {
     (void)mode;
     vfs_node_t* ino = resolve_path(path);
 
-    if (flags & 1) { // O_WRONLY / O_CREAT
+    if (flags & 1) { // O_CREAT — create a file
         if (!ino) {
             char child_name[MAX_NAME];
             vfs_node_t* parent = resolve_parent(path, child_name);
@@ -167,7 +174,8 @@ int vfs_open(const char* path, int flags, mode_t mode) {
         return (int)(uintptr_t)ino;
     }
 
-    if (!ino || ino->type != 0) return -1;
+    if (!ino) return -1;
+    ino->readdir_idx = 0;  // reset readdir cursor on open
     return (int)(uintptr_t)ino;
 }
 
@@ -300,8 +308,17 @@ void vfs_rename(const char* old, const char* new) {
 }
 
 dirent_t* vfs_readdir(int fd) {
-    (void)fd;
-    return NULL;
+    vfs_node_t* dir = (vfs_node_t*)(uintptr_t)(uint32_t)fd;
+    if (!dir || dir->type != 1) return NULL;
+    if (dir->readdir_idx >= dir->child_count) return NULL;
+    vfs_node_t* child = dir->children[dir->readdir_idx];
+    dir->readdir_idx++;
+    static dirent_t entry;
+    strncpy(entry.name, child->name, MAX_FILENAME - 1);
+    entry.name[MAX_FILENAME - 1] = '\0';
+    entry.type = child->type;
+    entry.ino = child->node_id;
+    return &entry;
 }
 
 // ==================== Mount table ====================
@@ -472,15 +489,25 @@ int vfs_touch(const char* path) {
 int vfs_write_file(const char* path, const void* buf, uint32_t len) {
     mount_entry_t* me = vfs_find_mount(path);
     if (me && me->write_file) {
-        // Strip mount point prefix before passing to driver
         int mlen = strlen(me->mount_point);
         const char* subpath = path + mlen;
         if (subpath[0] == '\0') subpath = "/";
         return me->write_file(subpath, buf, len);
     }
-    // Fallback to RAM VFS
+    // Fallback to RAM VFS — auto-create file if it doesn't exist
     vfs_node_t* ino = resolve_path(path);
-    if (!ino || ino->type != 0) return -1;
+    if (!ino) {
+        char child_name[MAX_NAME];
+        vfs_node_t* parent = resolve_parent(path, child_name);
+        if (!parent || parent->type != 1) return -1;
+        ino = alloc_node();
+        if (!ino) return -1;
+        strncpy(ino->name, child_name, MAX_NAME - 1);
+        ino->type = 0;
+        ino->parent = parent;
+        parent->children[parent->child_count++] = ino;
+    }
+    if (ino->type != 0) return -1;
     if (ino->data) kfree(ino->data);
     ino->data = (uint8_t*)kmalloc(len);
     if (!ino->data && len > 0) return -1;

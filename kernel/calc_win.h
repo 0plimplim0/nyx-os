@@ -8,7 +8,8 @@
 #define CALC_MARGIN 8
 #define CALC_COLS 4
 #define CALC_WIN_W (CALC_COLS * (CALC_BTN_W + CALC_GAP) - CALC_GAP + 2 * CALC_MARGIN)
-#define CALC_WIN_H (CALC_DISP_H + CALC_GAP + 4 * (CALC_BTN_H + CALC_GAP) + CALC_MARGIN)
+#define CALC_WIN_H (CALC_MARGIN + CALC_DISP_H + CALC_GAP + 4 * (CALC_BTN_H + CALC_GAP) + CALC_MARGIN)
+#define CALC_WIN_CLIENT_H (CALC_WIN_H)
 
 #include "kernel.h"
 #include "compositor.h"

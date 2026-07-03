@@ -1835,15 +1835,27 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
             int width = 0, precision = -1;
             while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt - '0'); fmt++; }
             if (*fmt == '.') { fmt++; precision = 0; while (*fmt >= '0' && *fmt <= '9') { precision = precision * 10 + (*fmt - '0'); fmt++; } }
-            if (*fmt == 's') {
+            int long_flag = 0;
+            while (*fmt == 'l' || *fmt == 'h' || *fmt == 'z' || *fmt == 't') {
+                if (*fmt == 'l') long_flag = 1;
+                fmt++;
+            }
+            if (*fmt == 'c') {
+                char c = (char)va_arg(args, int);
+                if (written < (int)size - 1) { *p++ = c; written++; }
+                fmt++;
+            } else if (*fmt == 's') {
                 const char *s = va_arg(args, const char*);
                 if (!s) s = "(null)";
                 while (*s && written < (int)size - 1) { *p++ = *s++; written++; }
                 fmt++;
             } else if (*fmt == 'd' || *fmt == 'i') {
-                int val = va_arg(args, int);
-                char tmp[16];
-                itoa(val, tmp, 10);
+                long val = long_flag ? va_arg(args, long) : (long)va_arg(args, int);
+                char tmp[24];
+                int neg = 0;
+                if (val < 0) { neg = 1; val = -val; }
+                itoa((int)val, tmp, 10);
+                if (neg) { if (written < (int)size - 1) { *p++ = '-'; written++; } }
                 char *t = tmp;
                 int tlen = 0; while (t[tlen]) tlen++;
                 if (precision > tlen) {
@@ -1853,8 +1865,8 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
                 while (*t && written < (int)size - 1) { *p++ = *t++; written++; }
                 fmt++;
             } else if (*fmt == 'u') {
-                unsigned int val = va_arg(args, unsigned int);
-                char tmp[16];
+                unsigned long val = long_flag ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                char tmp[24];
                 itoa((int)val, tmp, 10);
                 char *t = tmp;
                 int tlen = 0; while (t[tlen]) tlen++;
@@ -1865,14 +1877,24 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
                 while (*t && written < (int)size - 1) { *p++ = *t++; written++; }
                 fmt++;
             } else if (*fmt == 'x' || *fmt == 'X') {
-                unsigned int val = va_arg(args, unsigned int);
-                char tmp[16];
+                unsigned long val = long_flag ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                char tmp[24];
                 itoa((int)val, tmp, 16);
                 char *t = tmp;
                 while (*t && written < (int)size - 1) { *p++ = *t++; written++; }
                 fmt++;
+            } else if (*fmt == 'p') {
+                void *val = va_arg(args, void*);
+                char tmp[24];
+                itoa((unsigned long)val, tmp, 16);
+                char *t = tmp;
+                if (written < (int)size - 1) { *p++ = '0'; written++; }
+                if (written < (int)size - 1) { *p++ = 'x'; written++; }
+                while (*t && written < (int)size - 1) { *p++ = *t++; written++; }
+                fmt++;
             } else {
-                *p++ = '%'; written++; fmt++;
+                if (written < (int)size - 1) { *p++ = '%'; written++; }
+                if (*fmt && written < (int)size - 1) { *p++ = *fmt++; written++; }
             }
         } else {
             *p++ = *fmt++; written++;
