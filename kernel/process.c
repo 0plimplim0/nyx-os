@@ -347,6 +347,48 @@ void reap_zombies(void) {
     preempt_enable();
 }
 
+// Block the calling thread until child `pid` becomes a zombie, then return its
+// exit code. This is the foreground-`exec` primitive: the shell (compositor)
+// thread parks here in PROC_BLOCKED, the scheduler runs the child, and the
+// child's SYS_EXIT wakes us via wake_waiters(). The zombie is freed afterwards by
+// reap_zombies() (it can't run while we're parked, so we still see the zombie).
+int kwait(uint32_t pid) {
+    process_t* self = get_current_process();
+    if (!self) return -1;
+    for (;;) {
+        // Check-and-block must be atomic w.r.t. the child exiting: with interrupts
+        // off the scheduler can't run, so the child can't zombie-and-wake between
+        // our check and marking ourselves blocked (no lost wakeup, single core).
+        __asm__ volatile("cli");
+        process_t* child = find_process(pid);
+        if (!child) { __asm__ volatile("sti"); return -1; }
+        if (child->state == PROC_ZOMBIE) {
+            int code = child->exit_code;
+            __asm__ volatile("sti");
+            return code;
+        }
+        self->state = PROC_BLOCKED;
+        self->waiting_for = pid;
+        // sti+hlt is atomic (sti delays interrupts one instruction): enable, then
+        // halt until the timer preempts us. The scheduler parks us (BLOCKED) and
+        // runs the child; when it exits we're set back to PROC_RUN and resumed here.
+        __asm__ volatile("sti; hlt");
+        // Resumed — loop and re-check (we're PROC_RUN again).
+    }
+}
+
+// Wake a parent blocked in kwait() on this exiting child. Called from SYS_EXIT
+// with interrupts masked (so the state change is atomic w.r.t. the parent).
+void wake_waiters(process_t* child) {
+    if (!child || !child->ppid) return;
+    process_t* parent = find_process(child->ppid);
+    if (parent && parent->state == PROC_BLOCKED &&
+        (parent->waiting_for == child->pid || parent->waiting_for == 0)) {
+        parent->waiting_for = 0;
+        parent->state = PROC_RUN;
+    }
+}
+
 static void idle_task(void) {
     while (1) {
         __asm__ volatile("hlt");

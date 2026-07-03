@@ -93,6 +93,7 @@ static void cmd_beep(int argc, char** argv);
 static void cmd_play(int argc, char** argv);
 static void cmd_sb16play(int argc, char** argv);
 static void cmd_exec(int argc, char** argv);
+static void cmd_spawn(int argc, char** argv);
 static void cmd_usertest(int argc, char** argv);
 static void cmd_tcptest(int argc, char** argv);
 static void cmd_httpget(int argc, char** argv);
@@ -150,7 +151,8 @@ static const command_t commands[] = {
     {"beep",      cmd_beep,      "Play a tone: beep [freq] [ms]", false},
     {"play",      cmd_play,      "Play a demo melody", false},
     {"sb16play",  cmd_sb16play,  "Test SB16 playback: sb16play [freq] [ms]", false},
-    {"exec",      cmd_exec,      "Execute ELF binary: exec <file>", false},
+    {"exec",      cmd_exec,      "Run ELF in foreground (waits): exec <file>", false},
+    {"spawn",     cmd_spawn,     "Run ELF in background: spawn <file>", false},
     {"usertest",  cmd_usertest,  "Spawn preemptive ring-3 test processes", false},
     {"tcptest",   cmd_tcptest,   "Test TCP: tcptest <ip> <port>", false},
     {"httpget",   cmd_httpget,   "HTTP GET: httpget <url>", false},
@@ -739,44 +741,28 @@ static void cmd_sb16play(int argc, char** argv) {
 }
 
 #include "elf.h"
+// Run an ELF as a FOREGROUND job: spawn it into the preemptive scheduler, then
+// block until it exits (kwait). The scheduler time-slices it against the shell
+// while we wait; the desktop is paused for the duration (the shell/compositor
+// thread is blocked in kwait), exactly like a foreground job in a real shell.
 static void cmd_exec(int argc, char** argv) {
     if (argc < 2) { printf("Usage: exec <file>\n"); return; }
-    const char* path = argv[1];
-
-    // Open the file
-    int fd = vfs_open(path, 0, 0);
-    if (fd < 0) { printf("File not found: %s\n", path); return; }
-    uint32_t size = vfs_fsize(fd);
-    uint8_t* data = vfs_fdata(fd);
-    if (!data || size == 0) { printf("Empty file\n"); vfs_close(fd); return; }
-
-    // Copy to kernel heap
-    uint8_t* copy = (uint8_t*)kmalloc(size);
-    if (!copy) { printf("Out of memory\n"); vfs_close(fd); return; }
-    memcpy_asm(copy, data, size);
-    vfs_close(fd);
-
-    // Validate and load ELF
-    if (!elf_validate(copy, size)) {
-        printf("Not a valid ELF64 executable\n");
-        kfree(copy);
+    int pid = spawn_user_path(argv[1]);
+    if (pid < 0) {
+        printf("exec: could not load %s (err %d)\n", argv[1], pid);
         return;
     }
-    printf("Loading ELF: %s (%u bytes)\n", path, size);
+    int code = kwait((uint32_t)pid);
+    printf("[exec] PID %d exited (code %d)\n", pid, code);
+}
 
-    process_t* proc = NULL;
-    if (elf_load(copy, size, &proc) != 0) {
-        printf("ELF load failed\n");
-        kfree(copy);
-        return;
-    }
-
-    // Directly switch to the user process (bypass scheduler wait). This returns
-    // when the process calls exit() (via the exit longjmp in switch_to_user_process).
-    printf("Switching to user process PID=%u...\n", proc->pid);
-    kfree(copy);
-    switch_to_user_process(proc);
-    reap_user_process(proc);   // process exited — free its address space + stacks
+// Run an ELF as a BACKGROUND job: spawn it and return immediately. It runs
+// preemptively alongside the desktop; 'ps' lists it and it's reaped when it exits.
+static void cmd_spawn(int argc, char** argv) {
+    if (argc < 2) { printf("Usage: spawn <file>\n"); return; }
+    int pid = spawn_user_path(argv[1]);
+    if (pid < 0) { printf("spawn: could not load %s (err %d)\n", argv[1], pid); return; }
+    printf("[spawn] %s running in background as PID %d\n", argv[1], pid);
 }
 
 // Load an ELF from `path` and hand it to the preemptive scheduler as a background
@@ -800,6 +786,9 @@ int spawn_user_path(const char* path) {
     kfree(copy);
     if (r != 0 || !proc) return -5;
     proc->sched_managed = 1;   // scheduler now round-robins this ring-3 process
+    extern process_t* get_current_process(void);
+    process_t* parent = get_current_process();
+    proc->ppid = parent ? parent->pid : 0;   // so kwait() can find/wake the parent
     sched_enable();
     return (int)proc->pid;
 }

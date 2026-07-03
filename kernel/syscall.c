@@ -183,8 +183,11 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
                 // another thread and never comes back here; reap_zombies() (a
                 // compositor background task) frees the address space + stacks. We
                 // can't free them here — we're still executing on this proc's kernel
-                // stack in its CR3.
+                // stack in its CR3. Record the status and wake a parent blocked in
+                // kwait() (all with interrupts masked, so it's atomic vs. the parent).
+                cur->exit_code = (int)a1;
                 cur->state = PROC_ZOMBIE;
+                wake_waiters(cur);
                 __asm__ volatile("sti");            // let the timer preempt us away
                 for (;;) __asm__ volatile("hlt");
             }

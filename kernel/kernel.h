@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.7.7"
+#define KERNEL_VERSION "5.7.8"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -145,15 +145,18 @@ typedef struct process {
     uint64_t program_break;
     uint32_t sched_managed;  // 1 = round-robined by the preemptive scheduler (spawn_user_path);
                              // blocking-exec and unstarted procs leave this 0 so they're skipped
+    uint32_t waiting_for;    // pid this proc is blocked in kwait() on (0 = not waiting)
+    int      exit_code;      // status passed to SYS_EXIT, collected by kwait()
     struct process* next;
     struct process* parent;
     struct process* children;
 } process_t;
 
 // Process states (kept numeric-compatible with the existing 0/1 usage).
-#define PROC_PARKED  0   // not runnable (retired kernel thread / blocked); scheduler skips
+#define PROC_PARKED  0   // not runnable (retired kernel thread); scheduler skips
 #define PROC_RUN     1   // runnable or running
 #define PROC_ZOMBIE  2   // scheduled user proc that exited; awaiting reap_zombies()
+#define PROC_BLOCKED 3   // blocked in kwait() until a child exits; scheduler skips
 
 // x86_64 TSS (102 bytes)
 // Layout per Intel Vol 3, Figure 7-9
@@ -587,6 +590,11 @@ void preempt_enable(void);
 // scheduler (non-blocking), and reap the ones that have exited.
 int  spawn_user_path(const char* path);
 void reap_zombies(void);
+// Block the current thread until child `pid` exits; returns its exit code (or -1
+// if there is no such process). Used by `exec` to run a foreground job.
+int  kwait(uint32_t pid);
+// Called from SYS_EXIT: wake a parent blocked in kwait() on this child.
+void wake_waiters(process_t* child);
 
 void init_timer(uint32_t frequency);
 uint32_t get_ticks(void);
