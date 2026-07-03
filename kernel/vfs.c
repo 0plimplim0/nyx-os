@@ -10,6 +10,8 @@
 static mount_entry_t mount_table[MAX_MOUNT_POINTS];
 static int mount_count = 0;
 
+#define VFS_MOUNT_DIRENTS 64   // max entries loaded per mounted directory open
+
 typedef struct vfs_node {
     char name[MAX_NAME];
     uint32_t type;         // 0=file, 1=dir
@@ -175,6 +177,22 @@ int vfs_open(const char* path, int flags, mode_t mode) {
     if (me) {
         const char* sub = path + strlen(me->mount_point);
         if (!*sub) sub = "/";
+
+        // Directory? readdir returns -1 for non-dirs, so probe by loading its
+        // entries once into the node; vfs_readdir then serves them by index.
+        dirent_t* dents = (dirent_t*)kmalloc(sizeof(dirent_t) * VFS_MOUNT_DIRENTS);
+        int nd = (me->readdir && dents) ? me->readdir(sub, dents, VFS_MOUNT_DIRENTS) : -1;
+        if (nd >= 0) {
+            vfs_node_t* dn = alloc_node();
+            if (!dn) { if (dents) kfree(dents); return -1; }
+            dn->type = 1; dn->mount_backed = 1; dn->mount_ent = me;
+            strncpy(dn->mpath, sub, MAX_NAME - 1);
+            dn->data = (uint8_t*)dents; dn->size = (uint32_t)nd;
+            return (int)(uintptr_t)dn;
+        }
+        if (dents) kfree(dents);
+
+        // Otherwise a regular file.
         uint32_t exists = me->resolve ? me->resolve(sub) : 0;
         if (!exists && !(flags & 1)) return -1;        // read of a missing file
         vfs_node_t* n = alloc_node();
@@ -396,6 +414,11 @@ void vfs_rename(const char* old, const char* new) {
 dirent_t* vfs_readdir(int fd) {
     vfs_node_t* dir = (vfs_node_t*)(uintptr_t)(uint32_t)fd;
     if (!dir || dir->type != 1) return NULL;
+    if (dir->mount_backed) {               // mounted-FS dir: entries loaded at open
+        dirent_t* ents = (dirent_t*)dir->data;
+        if (!ents || dir->readdir_idx >= dir->size) return NULL;
+        return &ents[dir->readdir_idx++];
+    }
     if (dir->readdir_idx >= dir->child_count) return NULL;
     vfs_node_t* child = dir->children[dir->readdir_idx];
     dir->readdir_idx++;
