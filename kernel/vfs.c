@@ -37,21 +37,29 @@ static vfs_node_t* free_nodes[MAX_INODES];
 static int free_node_count = 0;
 
 static vfs_node_t* alloc_node(void) {
-    vfs_node_t* node;
+    // preempt_disable: the node pool + free-list are not reentrant. A preemptive
+    // context switch mid-update (to another FS caller) would corrupt
+    // free_node_count / hand two callers the same node.
+    preempt_disable();
+    vfs_node_t* node = NULL;
     if (free_node_count > 0) {
         node = free_nodes[--free_node_count];
-    } else {
-        if (node_count >= MAX_INODES) return NULL;
+    } else if (node_count < MAX_INODES) {
         node = &nodes[node_count++];
     }
-    memset_asm(node, 0, sizeof(vfs_node_t));
-    node->node_id = (uint32_t)(node - nodes);
+    if (node) {
+        memset_asm(node, 0, sizeof(vfs_node_t));
+        node->node_id = (uint32_t)(node - nodes);
+    }
+    preempt_enable();
     return node;
 }
 
 static void free_node(vfs_node_t* n) {
-    if (!n || free_node_count >= MAX_INODES) return;
-    free_nodes[free_node_count++] = n;
+    preempt_disable();
+    if (n && free_node_count < MAX_INODES)
+        free_nodes[free_node_count++] = n;
+    preempt_enable();
 }
 
 static vfs_node_t* find_child(vfs_node_t* dir, const char* name) {
@@ -432,6 +440,38 @@ dirent_t* vfs_readdir(int fd) {
 
 // ==================== Mount table ====================
 
+// --- FS re-entrancy guard ---------------------------------------------------
+// EXT2 shares ONE global scratch buffer (`block_buf` in ext2.c) across an entire
+// operation, and the VFS node pool above isn't reentrant either. User-process FS
+// syscalls already run with interrupts masked (atomic), but a kernel-context FS
+// caller — a shell command / file-manager action on the compositor thread — runs
+// with interrupts on and can be preempted mid-operation; if a scheduled process
+// then makes an FS syscall, the two trample the same buffer. We close the gap by
+// running each EXT2 operation with preemption disabled (the scheduler keeps the
+// current thread — a coarse but correct single-core "FS lock"). These thin
+// wrappers sit on the mount function-pointers so ext2.c needs no changes.
+static uint32_t fs_resolve(const char* p) {
+    preempt_disable(); uint32_t r = ext2_resolve(p);   preempt_enable(); return r;
+}
+static uint32_t fs_get_size(const char* p) {
+    preempt_disable(); uint32_t r = ext2_get_size(p);  preempt_enable(); return r;
+}
+static int fs_read_file(const char* p, void* b, uint32_t n) {
+    preempt_disable(); int r = ext2_read_file(p, b, n); preempt_enable(); return r;
+}
+static int fs_write_file(const char* p, const void* b, uint32_t n) {
+    preempt_disable(); int r = ext2_write_file(p, b, n); preempt_enable(); return r;
+}
+static int fs_readdir(const char* p, dirent_t* e, uint32_t m) {
+    preempt_disable(); int r = ext2_readdir(p, e, m);  preempt_enable(); return r;
+}
+static int fs_mkdir(const char* p) {
+    preempt_disable(); int r = ext2_mkdir(p);          preempt_enable(); return r;
+}
+static int fs_unlink(const char* p) {
+    preempt_disable(); int r = ext2_unlink(p);         preempt_enable(); return r;
+}
+
 int vfs_mount(const char* mount_point, int fs_type, void* fs_data) {
     (void)fs_data;
     if (mount_count >= MAX_MOUNT_POINTS) return -1;
@@ -444,13 +484,14 @@ int vfs_mount(const char* mount_point, int fs_type, void* fs_data) {
     me->readdir = NULL;
 
     if (fs_type == FS_TYPE_EXT2) {
-        me->resolve   = ext2_resolve;
-        me->get_size  = ext2_get_size;
-        me->read_file = ext2_read_file;
-        me->write_file = ext2_write_file;
-        me->readdir    = ext2_readdir;
-        me->mkdir      = ext2_mkdir;
-        me->unlink     = ext2_unlink;
+        // Point at the preempt-guarded wrappers, not ext2_* directly (see above).
+        me->resolve   = fs_resolve;
+        me->get_size  = fs_get_size;
+        me->read_file = fs_read_file;
+        me->write_file = fs_write_file;
+        me->readdir    = fs_readdir;
+        me->mkdir      = fs_mkdir;
+        me->unlink     = fs_unlink;
     }
 
     mount_count++;
