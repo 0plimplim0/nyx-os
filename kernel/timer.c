@@ -25,9 +25,27 @@ uint32_t get_ticks(void) {
 }
 
 void sleep(uint32_t milliseconds) {
-    uint32_t start = tick_count;
     uint32_t ticks_to_wait = (milliseconds * timer_frequency) / 1000;
-    while ((tick_count - start) < ticks_to_wait) {
-        __asm__ volatile("nop");
+    uint32_t target = tick_count + ticks_to_wait;
+
+    // With the preemptive scheduler running, block on the timer wait queue instead
+    // of busy-waiting: mark ourselves PROC_BLOCKED with a wake_tick and yield, so
+    // the scheduler runs other threads and wakes us (irq_scheduler_tick) once
+    // tick_count reaches the target. Only the compositor/kernel-thread contexts
+    // call sleep(), all with interrupts enabled — never an IRQ handler.
+    process_t* self = sched_is_enabled() ? get_current_process() : NULL;
+    if (self) {
+        for (;;) {
+            // cli makes the deadline check + block atomic vs. the waking tick.
+            __asm__ volatile("cli");
+            if ((int32_t)(tick_count - target) >= 0) { __asm__ volatile("sti"); break; }
+            self->wake_tick = target;
+            self->state = PROC_BLOCKED;
+            __asm__ volatile("sti; hlt");   // parked until the scheduler wakes us
+        }
+        self->wake_tick = 0;
+    } else {
+        // No scheduler yet (early boot): nothing else to run, just idle to the tick.
+        while ((int32_t)(tick_count - target) < 0) __asm__ volatile("hlt");
     }
 }

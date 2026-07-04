@@ -1230,6 +1230,12 @@ static void cmd_kill(int argc, char** argv) {
     uint32_t pid = (uint32_t)atoi(argv[1]);
     process_t* p = find_process(pid);
     if (!p) { printf("kill: process %d not found\n", pid); return; }
+    if (p->page_directory == NULL) {
+        // init/idle/compositor/mtdemo are kernel threads; freeing their stacks out
+        // from under the scheduler would crash the system.
+        printf("kill: %d is a kernel thread — refusing\n", pid);
+        return;
+    }
     destroy_process(pid);
     printf("kill: process %d terminated\n", pid);
 }

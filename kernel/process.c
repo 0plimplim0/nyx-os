@@ -163,11 +163,22 @@ void reap_user_process(process_t* proc) {
 
 void destroy_process(uint64_t pid) {
     for (int i = 0; i < process_count; i++) {
-        if (process_table[i] && process_table[i]->pid == pid) {
-            // reap_user_process removes the slot and frees the page directory and
-            // the stack via its kmalloc base (proc->stack is a *middle* pointer, so
-            // the old kfree(proc->stack) here corrupted the heap).
-            reap_user_process(process_table[i]);
+        process_t* p = process_table[i];
+        if (p && p->pid == pid) {
+            if (p->sched_managed && p->state != PROC_ZOMBIE) {
+                // A live scheduled process: don't free it out from under the
+                // scheduler (it may be a saved ring-3 context awaiting its next
+                // slice). Mark it a zombie so the scheduler stops running it, wake
+                // anyone kwait()-ing on it, and let reap_zombies() free it safely.
+                p->exit_code = -1;             // killed
+                p->state = PROC_ZOMBIE;
+                wake_waiters(p);
+            } else {
+                // Not scheduler-managed (a registered placeholder that never ran) —
+                // safe to free right here (reap_user_process removes the slot and
+                // frees the page directory + kernel-stack kmalloc base).
+                reap_user_process(p);
+            }
             return;
         }
     }
@@ -230,6 +241,18 @@ static void sched_target(process_t* p) {
 }
 
 void irq_scheduler_tick(void) {
+    // Timer wait queue: wake any sleeper whose deadline has arrived. Sleepers are
+    // PROC_BLOCKED with a non-zero wake_tick (kwait() blockers use wake_tick==0 and
+    // are woken by wake_waiters instead, so the two don't collide).
+    for (int i = 0; i < process_count; i++) {
+        process_t* p = process_table[i];
+        if (p && p->state == PROC_BLOCKED && p->wake_tick != 0 &&
+            (int32_t)(tick_count - p->wake_tick) >= 0) {
+            p->wake_tick = 0;
+            p->state = PROC_RUN;
+        }
+    }
+
     // Default: resume the thread we interrupted, preserving its address space (a
     // ring-3 process keeps its own CR3 if it's the only thing runnable).
     process_t* cur = (current_idx >= 0 && current_idx < process_count)

@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.7.9"
+#define KERNEL_VERSION "5.7.10"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -146,6 +146,7 @@ typedef struct process {
     uint32_t sched_managed;  // 1 = round-robined by the preemptive scheduler (spawn_user_path);
                              // blocking-exec and unstarted procs leave this 0 so they're skipped
     uint32_t waiting_for;    // pid this proc is blocked in kwait() on (0 = not waiting)
+    uint32_t wake_tick;      // tick_count to wake a sleep()-blocked proc (0 = not sleeping)
     int      exit_code;      // status passed to SYS_EXIT, collected by kwait()
     struct process* next;
     struct process* parent;

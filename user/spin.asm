@@ -11,7 +11,7 @@ global _start
 
 section .text
 _start:
-    mov r12, 4                  ; heartbeats before exiting
+    mov r12, 10                 ; heartbeats before exiting (long enough to `kill` mid-run)
 
 .outer:
     mov rax, 2                  ; SYS_PRINT
