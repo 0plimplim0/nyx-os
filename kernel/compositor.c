@@ -1041,7 +1041,21 @@ void compositor_run(void) {
     draw_cursor(mouse_x, mouse_y);
     int redraw = 0;
     uint32_t clock_tick = 0;
+    extern volatile int kbd_head, kbd_tail;
     while (!quit) {
+        // Idle-yield: when nothing is happening — no key queued, no mouse button
+        // held, the pointer hasn't moved, and no drag/resize/menu is active — sleep
+        // briefly instead of busy-polling, so background jobs (or the CPU itself)
+        // get the time. Any activity skips the sleep, so interactivity is unchanged;
+        // the wakeup is within ~5ms (imperceptible). sleep() blocks via the scheduler
+        // when it's running, or idles (hlt) to the tick otherwise.
+        if (kbd_head == kbd_tail && mouse_get_buttons() == 0 &&
+            mouse_get_x() == mouse_x && mouse_get_y() == mouse_y &&
+            !drag_id && !resize_id && drag_icon_idx < 0 &&
+            !ctx_menu_open && !start_menu_open) {
+            sleep(5);
+        }
+
         kernel_poll_net();
         run_background_tasks();
 

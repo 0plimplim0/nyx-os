@@ -96,6 +96,8 @@ static void cmd_exec(int argc, char** argv);
 static void cmd_spawn(int argc, char** argv);
 static void cmd_jobs(int argc, char** argv);
 static void cmd_wait(int argc, char** argv);
+static void cmd_nice(int argc, char** argv);
+static void cmd_renice(int argc, char** argv);
 static void cmd_usertest(int argc, char** argv);
 static void cmd_tcptest(int argc, char** argv);
 static void cmd_httpget(int argc, char** argv);
@@ -157,6 +159,8 @@ static const command_t commands[] = {
     {"spawn",     cmd_spawn,     "Run ELF in background: spawn <file>", false},
     {"jobs",      cmd_jobs,      "List background jobs", false},
     {"wait",      cmd_wait,      "Wait for background jobs: wait [pid]", false},
+    {"nice",      cmd_nice,      "Spawn ELF at a scheduler weight: nice <weight> <file>", false},
+    {"renice",    cmd_renice,    "Change a process's weight: renice <pid> <weight>", false},
     {"usertest",  cmd_usertest,  "Spawn preemptive ring-3 test processes", false},
     {"tcptest",   cmd_tcptest,   "Test TCP: tcptest <ip> <port>", false},
     {"httpget",   cmd_httpget,   "HTTP GET: httpget <url>", false},
@@ -800,6 +804,36 @@ static void cmd_wait(int argc, char** argv) {
     }
     kwait_all();
     printf("wait: all background jobs done.\n");
+}
+
+// Clamp a scheduler weight to a sane range (1..64; higher = more CPU per turn).
+static uint32_t clamp_weight(int w) {
+    if (w < 1) w = 1;
+    if (w > 64) w = 64;
+    return (uint32_t)w;
+}
+
+// Spawn an ELF as a background job at a given scheduler weight (like `spawn`, but
+// with a chosen CPU share — weight N runs N ticks per round-robin turn).
+static void cmd_nice(int argc, char** argv) {
+    if (argc < 3) { printf("Usage: nice <weight> <file>\n"); return; }
+    uint32_t w = clamp_weight(atoi(argv[1]));
+    int pid = spawn_user_path(argv[2]);
+    if (pid < 0) { printf("nice: could not load %s (err %d)\n", argv[2], pid); return; }
+    process_t* p = find_process((uint32_t)pid);
+    if (p) p->sched_weight = w;
+    printf("[nice] %s running in background as PID %d, weight %u\n", argv[2], pid, w);
+}
+
+// Change the scheduler weight of a running process (its CPU share).
+static void cmd_renice(int argc, char** argv) {
+    if (argc < 3) { printf("Usage: renice <pid> <weight>\n"); return; }
+    uint32_t pid = (uint32_t)atoi(argv[1]);
+    uint32_t w = clamp_weight(atoi(argv[2]));
+    process_t* p = find_process(pid);
+    if (!p) { printf("renice: process %d not found\n", pid); return; }
+    p->sched_weight = w;
+    printf("renice: PID %d weight set to %u\n", pid, w);
 }
 
 // Load an ELF from `path` and hand it to the preemptive scheduler as a background
