@@ -330,10 +330,11 @@ static void cmd_mtdemo(int argc, char** argv) {
     if (r == 1)  { printf("mtdemo already ran this session (threads retired). Reboot to run again.\n"); return; }
     printf("Preemptive scheduler ENABLED.\n");
     printf("Two kernel threads (mtdemoA/B) are now time-sliced with the desktop.\n");
-    printf("Sampling their counters over ~400ms (both should rise):\n");
+    printf("mtdemoB has 3x the scheduler weight, so it should count ~3x faster.\n");
+    printf("Sampling their counters over ~400ms:\n");
     sleep(400);   // main thread yields; scheduler runs A and B in the gaps
-    printf("  mtdemoA: %u -> %u\n", (unsigned)a0, (unsigned)mtdemo_a_count);
-    printf("  mtdemoB: %u -> %u\n", (unsigned)b0, (unsigned)mtdemo_b_count);
+    printf("  mtdemoA (weight 1): %u -> %u\n", (unsigned)a0, (unsigned)mtdemo_a_count);
+    printf("  mtdemoB (weight 3): %u -> %u\n", (unsigned)b0, (unsigned)mtdemo_b_count);
     printf("They run ~3s of heartbeats, then retire so the desktop returns to\n");
     printf("full speed. Heartbeats also go to the serial log; 'ps' lists them.\n");
 }
@@ -1531,6 +1532,7 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
         // Register compositor as scheduler process so scheduler manages it correctly
         process_t* comp_proc = create_process("compositor", compositor_run, 0);
         if (comp_proc) {
+            comp_proc->sched_weight = SCHED_WEIGHT_GUI;   // GUI gets priority over jobs
             for (int i = 0; i < process_count; i++) {
                 if (process_table[i] == comp_proc) { current_idx = i; break; }
             }

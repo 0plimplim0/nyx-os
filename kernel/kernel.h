@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.7.11"
+#define KERNEL_VERSION "5.7.12"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -147,6 +147,8 @@ typedef struct process {
                              // blocking-exec and unstarted procs leave this 0 so they're skipped
     uint32_t waiting_for;    // pid this proc is blocked in kwait() on (0 = not waiting)
     uint32_t wake_tick;      // tick_count to wake a sleep()-blocked proc (0 = not sleeping)
+    uint32_t sched_weight;   // ticks per turn in the weighted round-robin (0 => 1)
+    uint32_t sched_quantum;  // ticks left in the current turn (scheduler-internal)
     int      exit_code;      // status passed to SYS_EXIT, collected by kwait()
     struct process* next;
     struct process* parent;
@@ -157,7 +159,11 @@ typedef struct process {
 #define PROC_PARKED  0   // not runnable (retired kernel thread); scheduler skips
 #define PROC_RUN     1   // runnable or running
 #define PROC_ZOMBIE  2   // scheduled user proc that exited; awaiting reap_zombies()
-#define PROC_BLOCKED 3   // blocked in kwait() until a child exits; scheduler skips
+#define PROC_BLOCKED 3   // blocked in kwait()/sleep(); scheduler skips
+
+// Weighted round-robin: the compositor (GUI) runs several ticks per turn so it
+// stays responsive while background jobs (weight 1) run.
+#define SCHED_WEIGHT_GUI 4
 
 // x86_64 TSS (102 bytes)
 // Layout per Intel Vol 3, Figure 7-9

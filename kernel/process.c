@@ -265,6 +265,16 @@ void irq_scheduler_tick(void) {
     if (!sched_enabled || preempt_count > 0 || process_count == 0) return;
     if (!cur) return;
 
+    // Weighted round-robin: keep running the current thread until its time quantum
+    // is spent, so a high-weight proc (the compositor, SCHED_WEIGHT_GUI) runs
+    // several ticks in a row and gets a bigger CPU share than background jobs
+    // (weight 1). Only while it's still runnable — a blocked/exited cur falls
+    // through to pick someone else.
+    if (cur->state == PROC_RUN && cur->sched_quantum > 1) {
+        cur->sched_quantum--;
+        return;                          // defaults above resume cur
+    }
+
     // Remember where to resume the outgoing thread.
     cur->stack = (void*)saved_rsp;
 
@@ -281,10 +291,13 @@ void irq_scheduler_tick(void) {
         if (p->stack == NULL) continue;
         if (p->page_directory != NULL && !p->sched_managed) continue;
         current_idx = idx;
+        p->sched_quantum = p->sched_weight ? p->sched_weight : 1;   // start its turn
         sched_target(p);
         return;
     }
-    // No other runnable thread — stay on the current one (defaults above).
+    // Nobody else runnable — keep the current thread, refreshing its quantum.
+    if (cur->state == PROC_RUN)
+        cur->sched_quantum = cur->sched_weight ? cur->sched_weight : 1;
 }
 
 void schedule(void) {
@@ -499,6 +512,7 @@ int mtdemo_start(void) {
     mtdemo_a_proc = create_process("mtdemoA", (void*)mtdemo_thread_a, 0);
     mtdemo_b_proc = create_process("mtdemoB", (void*)mtdemo_thread_b, 0);
     if (!mtdemo_a_proc || !mtdemo_b_proc) return -1;
+    mtdemo_b_proc->sched_weight = 3;   // B gets 3x the CPU of A — shows weighted RR
     mtdemo_started = 1;
     sched_enable();
     return 0;
