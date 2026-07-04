@@ -191,6 +191,16 @@ static void ctx_paste(fileman_win_t* fm) {
         snprintf(dst, sizeof(dst), "%s/%s", fm->cwd, basename);
 
     if (fm->clipboard_mode == 1) {
+        // Copy — if the name is already taken (e.g. pasting into the same directory)
+        // make a unique "<name>_copy" so paste always produces a new file.
+        int exists = vfs_open(dst, 0, 0);
+        if (exists >= 0) {
+            vfs_close(exists);
+            if (strcmp(fm->cwd, "/") == 0)
+                snprintf(dst, sizeof(dst), "/%s_copy", basename);
+            else
+                snprintf(dst, sizeof(dst), "%s/%s_copy", fm->cwd, basename);
+        }
         if (vfs_cp(fm->clipboard_path, dst) == 0)
             snprintf(fm->status, sizeof(fm->status), "Pasted: %s", basename);
         else
@@ -519,6 +529,25 @@ void fileman_win_click(window_t* win, int mx, int my, int btn) {
     }
 }
 
+// Map a y coordinate to the entry index at that list row (or -1 if outside the
+// list). Uses the same geometry as draw/click, so drop-target detection matches
+// what the user sees.
+static int fileman_row_at(fileman_win_t* fm, window_t* win, int my) {
+    int cy = win->y + TITLE_H;
+    uint32_t char_h = FONT_HEIGHT;
+    int search_bar_h = fm->search_active ? HEADER_H : 0;
+    int list_header_y = cy + TOOLBAR_H + HEADER_H + search_bar_h;
+    int list_y = list_header_y + (int)char_h + 4;
+    int avail_h = (int)(win->h - TOOLBAR_H - HEADER_H - search_bar_h - (int)char_h - 4 - HEADER_H - 4);
+    int max_rows = avail_h / (int)char_h;
+    if (max_rows < 1) max_rows = 1;
+    int disp_count = fm->search_active ? fm->search_count : fm->entry_count;
+    if (my < list_y || my >= list_y + max_rows * (int)char_h) return -1;
+    int idx = (my - list_y) / (int)char_h + fm->scroll_offset;
+    if (idx < 0 || idx >= disp_count) return -1;
+    return fm->search_active ? fm->search_indices[idx] : idx;
+}
+
 void fileman_win_mousemove(window_t* win, int mx, int my, int btns) {
     fileman_win_t* fm = (fileman_win_t*)win->reserved;
     if (!fm) return;
@@ -557,37 +586,52 @@ void fileman_win_mousemove(window_t* win, int mx, int my, int btns) {
             int dy = my - fm->drag_start_y;
             if (dx * dx + dy * dy > 36) { // 6px threshold
                 fm->drag_active = 1;
-                fm->drag_mode = 2; // copy by default
+                fm->drag_mode = is_ctrl_pressed() ? 2 : 1; // Ctrl = copy, else move
                 fm->drag_cur_x = mx;
                 fm->drag_cur_y = my;
             }
         }
     } else {
-        // Button released
+        // Button released — perform the drop.
         if (fm->drag_active) {
-            // Drop: perform copy
-            int drag_realease_idx = (fm->drag_file_idx >= 0 && fm->drag_file_idx < fm->entry_count)
-                ? fm->drag_file_idx : 0;
-            char src[256];
-            fileman_get_path(fm, fm->entries[drag_realease_idx], src, sizeof(src));
-            const char* basename = src;
-            for (int i = 0; src[i]; i++)
-                if (src[i] == '/') basename = &src[i] + 1;
-            char dst[256];
-            if (strcmp(fm->cwd, "/") == 0)
-                snprintf(dst, sizeof(dst), "/%s", basename);
-            else
-                snprintf(dst, sizeof(dst), "%s/%s", fm->cwd, basename);
-            if (fm->drag_mode == 2) {
-                if (vfs_cp(src, dst) == 0)
-                    snprintf(fm->status, sizeof(fm->status), "Drag copied: %s", basename);
+            int src_idx = (fm->drag_file_idx >= 0 && fm->drag_file_idx < fm->entry_count)
+                ? fm->drag_file_idx : -1;
+            if (src_idx >= 0) {
+                char src[256];
+                fileman_get_path(fm, fm->entries[src_idx], src, sizeof(src));
+                const char* basename = src;
+                for (int i = 0; src[i]; i++)
+                    if (src[i] == '/') basename = &src[i] + 1;
+
+                // Destination directory: if dropped onto a folder row, move/copy the
+                // file INTO that folder; otherwise it stays in the current directory.
+                char dstdir[256];
+                int tgt = fileman_row_at(fm, win, my);
+                if (tgt >= 0 && tgt != src_idx && fm->entry_types[tgt]) {
+                    fileman_get_path(fm, fm->entries[tgt], dstdir, sizeof(dstdir));
+                } else {
+                    strncpy(dstdir, fm->cwd, sizeof(dstdir));
+                    dstdir[sizeof(dstdir) - 1] = '\0';
+                }
+                char dst[256];
+                if (strcmp(dstdir, "/") == 0)
+                    snprintf(dst, sizeof(dst), "/%s", basename);
                 else
-                    snprintf(fm->status, sizeof(fm->status), "Drag copy failed");
-            } else {
-                vfs_rename(src, dst);
-                snprintf(fm->status, sizeof(fm->status), "Drag moved: %s", basename);
+                    snprintf(dst, sizeof(dst), "%s/%s", dstdir, basename);
+
+                if (strcmp(src, dst) == 0) {
+                    snprintf(fm->status, sizeof(fm->status), "Dropped in place");
+                } else if (fm->drag_mode == 2) {          // Ctrl-drag → copy
+                    if (vfs_cp(src, dst) == 0)
+                        snprintf(fm->status, sizeof(fm->status), "Copied %s -> %s", basename, dstdir);
+                    else
+                        snprintf(fm->status, sizeof(fm->status), "Copy failed (name exists?)");
+                } else {                                   // plain drag → move
+                    vfs_rename(src, dst);
+                    snprintf(fm->status, sizeof(fm->status), "Moved %s -> %s", basename, dstdir);
+                }
+                fileman_refresh(fm);
             }
-            fileman_refresh(fm);
         }
         fm->mouse_down = 0;
         fm->drag_active = 0;
