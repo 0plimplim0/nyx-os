@@ -1,0 +1,101 @@
+# Contributing to NyxOS
+
+Thanks for your interest! NyxOS is a from-scratch x86_64 hobby kernel, and
+every contribution helps move it forward.
+
+## Before you start
+
+Open an issue or start a discussion to propose your change — especially for
+new features, refactors, or anything that touches core subsystems (paging,
+scheduling, syscalls, the VFS layer). Small bug fixes are always welcome
+without prior discussion.
+
+## Getting started
+
+1. Fork and clone the repo.
+2. Make sure you have a working x86_64 cross-compiler (`x86_64-elf-gcc`)
+   or a host GCC with `-m64` support.
+3. Run `.\build.ps1` (Windows) or `make -C kernel` (Linux/WSL) to verify
+   the kernel builds with **zero warnings**.
+4. Run `.\run.ps1` to boot in QEMU and confirm the desktop loads.
+
+## Coding standards
+
+### C
+
+- **K&R braces** — opening brace on the same line as the statement:
+  ```c
+  void func(int x) {
+      if (x) {
+          do_stuff();
+      }
+  }
+  ```
+- **Indent:** 4 spaces, no tabs.
+- **Typedefs:** struct and enum typedefs use the `_t` suffix.
+- **Naming:** `snake_case` for functions and variables, `UPPER_SNAKE` for
+  macros and constants.
+- **Static functions** are preferred over globals; mark file-internal symbols
+  `static`.
+- **No comments** unless the code does something non-obvious (bit twiddling,
+  hardware quirks, workarounds).
+- **No magic numbers** — define named constants.
+- **`memset_asm`/`memcpy`** instead of libc equivalents (no libc in the
+  kernel). `snprintf` from `kernel.h` is the safe formatter.
+- **No dynamic allocation** in interrupt context unless you've audited every
+  caller and it's behind `preempt_disable`.
+
+### Assembly (NASM)
+
+- **Intel syntax**, `.asm` extension.
+- Labels in `snake_case`, local labels prefixed with `.`:
+  ```asm
+  global load_page_directory
+  load_page_directory:
+      mov cr3, rdi
+      ret
+  ```
+- Kernighan–Ritchie-style comment blocks (`;` comments).
+
+### Commit messages
+
+Follow the existing style:
+
+```
+v5.x.y: Short description (72-char max)
+
+Longer explanation of what changed and why, wrapped at 72 characters.
+Include relevant bug numbers or context.
+```
+
+### Build expectations
+
+The build **must** finish with zero errors and zero warnings. The AGENTS.md
+tracks the warning count across releases — a regression is a blocker.
+
+## Testing
+
+- The project uses no test framework. Most verification is done manually in
+  QEMU via the shell (`exec /init.elf`, `cowtest`, `tcploop`, `ping`, etc.).
+- If your change touches the scheduler, timer, or process life cycle, run
+  `mtdemo` and verify the GUI stays stable.
+- If your change touches networking, run `ping 127.0.0.1`, `tcploop`, and
+  `dhcp` (if a NIC is available).
+- If your change touches the GUI compositor, open a Terminal window, type
+  several commands, drag windows, and verify no crashes.
+
+## Pull request process
+
+1. Keep PRs focused — one feature or fix per PR.
+2. Rebase onto the latest `master` before opening.
+3. Ensure the build produces zero warnings.
+4. Mention what you tested and how.
+
+## What needs help
+
+Check the "Next features to add" section at the end of `AGENTS.md` — it
+lists the highest-priority work along with context and constraints.
+
+## Questions
+
+Open a discussion or reach out. No question is too small.
