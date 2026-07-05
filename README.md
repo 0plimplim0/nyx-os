@@ -21,6 +21,9 @@
   <a href="https://kazah-png.github.io/nyx-os/">
     <img src="https://img.shields.io/badge/website-up-00ff9d?style=flat&logo=githubpages&logoColor=white" />
   </a>
+  <a href="wiki/Home.md">
+    <img src="https://img.shields.io/badge/wiki-local-800080?style=flat&logo=github&logoColor=white" />
+  </a>
 </div>
 
 ---
