@@ -1,4 +1,4 @@
-// hello.nyx — primer programa en Nyx C para NyxOS.
+// hello.nyx — first Nyx C program for NyxOS.
 // Compila con: nyxc hello.nyx -o hello.c  (transpila a C, ver hello_nyx.c)
 
 extern syscall {
