@@ -78,6 +78,28 @@ The project implements core kernel primitives, a custom network stack (RTL8139 N
 
 ---
 
+## See it in action
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<img src="media/startup.gif" alt="NyxOS booting to the desktop" width="100%"/>
+<p align="center"><em>Boot → login → windowed desktop (compositor GUI)</em></p>
+</td>
+<td width="50%" valign="top">
+<img src="media/terminal.gif" alt="NyxOS terminal session" width="100%"/>
+<p align="center"><em>Live shell — <code>nyxfetch</code>, <code>ls</code>, <code>ps</code>, <code>mem</code></em></p>
+</td>
+</tr>
+</table>
+
+<div align="center">
+  <img src="media/process-model.gif" alt="NyxOS ring-3 process model self-tests" width="72%"/>
+  <p><em>Ring-3 process model — fork · pipe · execve · dup2 · lazy sbrk · coreutils · signals · mmap (real serial output)</em></p>
+</div>
+
+---
+
 ## Tech stack
 
 **Languages**
