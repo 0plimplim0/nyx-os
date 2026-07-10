@@ -26,6 +26,10 @@
 #define SYS_GETCWD   22
 #define SYS_MKDIR    23
 #define SYS_UNLINK   24
+#define SYS_TTYMODE  25
+
+#define TTY_CANON   0   /* kernel line discipline: echoed, backspace-edited lines */
+#define TTY_RAW     1   /* byte-at-a-time, no echo, arrows as ESC [ A/B/C/D */
 
 /* mmap prot/flags (anonymous mappings — see kernel/mmap.c). */
 #define PROT_NONE   0
@@ -236,6 +240,12 @@ static inline long mkdir(const char* path, int mode) {
 }
 static inline long unlink(const char* path) {
     return syscall1(SYS_UNLINK, (long)path);
+}
+
+/* ttymode(TTY_RAW / TTY_CANON): switch this process's stdin discipline. Returns
+ * the previous mode. Raw mode is what a line editor runs on; execve resets it. */
+static inline long ttymode(int mode) {
+    return syscall1(SYS_TTYMODE, mode);
 }
 
 /* Create a pipe: fds[0] is the read end, fds[1] the write end. Returns 0, or -1.

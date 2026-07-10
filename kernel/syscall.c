@@ -158,6 +158,53 @@ static int stdin_read_line(char* kbuf, int max) {
     return len;
 }
 
+/* Raw stdin (SYS_TTYMODE raw): block until at least one key, then return what is
+ * immediately available — single bytes, NO echo (the caller renders its own line).
+ * Extended keys become ANSI escapes: ESC [ A/B/C/D (up/down/right/left), H/F
+ * (home/end) — 3 bytes, emitted only if they fit. Blocking follows the same
+ * discipline as stdin_read_line, and a pending signal interrupts with -EINTR. */
+static int stdin_read_raw(char* kbuf, int max) {
+    extern uint64_t user_cr3, user_rsp;
+    process_t* self = get_cur_proc();
+    uint64_t saved_cr3 = user_cr3, saved_ursp = user_rsp;
+    int len = 0;
+    for (;;) {
+        int k = getkey_poll();               /* extended keycode, ASCII, or 0 */
+        if (!k) {
+            if (len > 0) break;              /* drained all that was pending */
+            if (!self) break;
+            if (signal_pending(self)) { len = -EINTR; break; }
+            self->blocked_in_kernel = 1;
+            __asm__ volatile("sti; hlt");
+            __asm__ volatile("cli");
+            self->blocked_in_kernel = 0;
+            continue;
+        }
+        if (k >= 0x80) {                     /* extended key -> ESC [ x */
+            char x = 0;
+            switch (k) {
+                case KEY_UP:    x = 'A'; break;
+                case KEY_DOWN:  x = 'B'; break;
+                case KEY_RIGHT: x = 'C'; break;
+                case KEY_LEFT:  x = 'D'; break;
+                case KEY_HOME:  x = 'H'; break;
+                case KEY_END:   x = 'F'; break;
+                default: continue;           /* PgUp/PgDn/Ins/Del: dropped for now */
+            }
+            if (len + 3 > max) break;        /* no room for the full sequence */
+            kbuf[len++] = 0x1B; kbuf[len++] = '['; kbuf[len++] = x;
+            continue;
+        }
+        char c = (char)k;
+        if (c == '\r') c = '\n';
+        if (len < max) kbuf[len++] = c;
+        if (len >= max) break;
+    }
+    user_cr3 = saved_cr3;
+    user_rsp = saved_ursp;
+    return len;
+}
+
 /* ------------------------------------------------------------------ */
 /*  User memory access                                                */
 /* ------------------------------------------------------------------ */
@@ -376,7 +423,9 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
                     if (count == 0) return 0;
                     char* lbuf = (char*)kmalloc(count);
                     if (!lbuf) return -1;
-                    int n = stdin_read_line(lbuf, count);
+                    process_t* rp = get_cur_proc();
+                    int n = (rp && rp->tty_raw) ? stdin_read_raw(lbuf, count)
+                                                : stdin_read_line(lbuf, count);
                     if (n > 0 && copy_to_user(a2, lbuf, n) != 0) n = -1;
                     kfree(lbuf);
                     return n;
@@ -671,6 +720,17 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3, uin
             else *slash = '\0';
             if (!vfs_isdir(parent)) return -1;
             return (uint64_t)(int64_t)vfs_mkdir(path, (int)a2);
+        }
+        case SYS_TTYMODE: {
+            // ttymode(mode): TTY_CANON = kernel line discipline (echo + backspace),
+            // TTY_RAW = byte-at-a-time, no echo, arrows as ANSI escapes. Per-process;
+            // execve resets to canonical. Returns the previous mode.
+            process_t* cur = get_cur_proc();
+            if (!cur) return -1;
+            uint32_t prev = cur->tty_raw;
+            if (a1 == TTY_CANON || a1 == TTY_RAW) cur->tty_raw = (uint32_t)a1;
+            else return -1;
+            return prev;
         }
         case SYS_UNLINK: {
             // unlink(path): remove a file (or empty-dir semantics of vfs_unlink —

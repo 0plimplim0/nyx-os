@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.15"
+#define KERNEL_VERSION "5.8.16"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -98,6 +98,14 @@ typedef __builtin_va_list va_list;
 #define SYS_GETCWD   22
 #define SYS_MKDIR    23
 #define SYS_UNLINK   24
+#define SYS_TTYMODE  25
+
+/* SYS_TTYMODE modes. Canonical: read(0) returns a full line, echoed + backspace-
+ * edited by the kernel. Raw: read(0) returns bytes as they arrive, NO echo, and
+ * extended keys are delivered as ANSI escapes (ESC [ A/B/C/D = up/down/right/left,
+ * H/F = home/end) — the shell's line editor runs on this. */
+#define TTY_CANON   0
+#define TTY_RAW     1
 
 /* waitpid() options (a3). WNOHANG makes SYS_WAITPID return 0 immediately instead
  * of blocking when a matching child exists but has not exited yet — the shell
@@ -268,6 +276,10 @@ typedef struct process {
     // in open()/getdents() resolve against it; inherited on fork, kept across execve.
     // An empty string is treated as "/".
     char     cwd[MAX_PATH];
+    // stdin discipline (SYS_TTYMODE): 0 = canonical line reads, 1 = raw single-byte
+    // reads with arrows as ANSI escapes. NOT inherited on fork, reset by execve —
+    // only the process that asked for raw mode sees it.
+    uint32_t tty_raw;
     struct process* next;
     struct process* parent;
     struct process* children;

@@ -291,6 +291,7 @@ int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc) 
     // starts with an empty mmap space.
     for (int i = 0; i < PROC_MAX_VMAS; i++) self->mmap_vmas[i].used = 0;
     self->mmap_next = 0;
+    self->tty_raw = 0;           // new image gets the canonical stdin discipline
     if (old_pd) free_page_directory(old_pd);
 
     // Build the argv frame on the NEW stack. copy_to_user translates through

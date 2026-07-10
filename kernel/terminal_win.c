@@ -51,6 +51,12 @@ int terminal_capture_putchar(int c) {
         if (capture_term->output_len > 0)
             term_add_line(capture_term, capture_term->output_buf, VGA_LIGHT_GREY | (VGA_BLACK << 4));
         capture_term->output_len = 0;
+    } else if (c == '\b' || c == 0x7F) {
+        // Destructive backspace on the pending line — makes the kernel echo's
+        // "\b \b" and the shell line editor's redraws render correctly.
+        if (capture_term->output_len > 0) capture_term->output_len--;
+    } else if (c == '\r') {
+        capture_term->output_len = 0;      // carriage return: rebuild the line
     } else if (c >= 0x20 && capture_term->output_len < TERM_OUTPUT_MAX - 1) {
         capture_term->output_buf[capture_term->output_len++] = c;
     }

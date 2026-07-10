@@ -88,14 +88,17 @@ void init_keyboard(void) {
 // Conversión de scancode a carácter
 // ============================================================
 char scancode_to_ascii(uint8_t sc) {
-    int pressed = !(sc & 0x80);
-    sc &= 0x7F;
-
-    // --- Prefijo 0xE0 (teclas extendidas) ---
+    // --- 0xE0 prefix (extended keys) ---
+    // Checked on the RAW byte, before the press-bit masking below: 0xE0 & 0x7F is
+    // 0x60, so the old post-mask comparison could never match and extended keys
+    // (arrows/home/end) never reached the keycode ring at all.
     if (sc == 0xE0) {
         e0_prefix = 1;
         return 0;
     }
+
+    int pressed = !(sc & 0x80);
+    sc &= 0x7F;
 
     if (e0_prefix) {
         e0_prefix = 0;

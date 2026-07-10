@@ -300,6 +300,108 @@ static void on_sigint(int sig) {
     write(1, "^C\n", 3);
 }
 
+/* ---- line editor: raw-mode readline with history + cursor editing ---------- */
+/* Runs on TTY_RAW (no kernel echo): every keystroke arrives as a byte, arrows as
+ * ESC [ A/B/C/D (H/F = home/end), and we render the line ourselves. Redraws use
+ * '\r' + full reprint + trailing-erase + backspaces to park the cursor — both the
+ * GUI terminal capture (which rebuilds its pending line on '\r'/'\b') and a real
+ * serial terminal render that correctly. */
+#define HIST_MAX 16
+static char hist[HIST_MAX][128];
+static int  hist_count;
+
+static void redraw(const char* prompt, const char* buf, int len, int pos, int drawn) {
+    write(1, "\r", 1);
+    write(1, prompt, strlen(prompt));
+    if (len > 0) write(1, buf, len);
+    for (int i = len; i < drawn; i++) write(1, " ", 1);   /* erase leftovers */
+    int end = (drawn > len) ? drawn : len;
+    for (int i = end; i > pos; i--) write(1, "\b", 1);    /* park cursor at pos */
+}
+
+/* Read one edited line into out (NUL-terminated, no '\n'). Returns its length,
+ * or -1 if the read was interrupted (Ctrl-C). Restores canonical mode on exit. */
+static int readline(const char* prompt, char* out, int outsz) {
+    char buf[128], saved[128];
+    int len = 0, pos = 0, drawn = 0, saved_len = 0;
+    int hview = hist_count;                  /* one past the newest entry */
+    ttymode(TTY_RAW);
+    write(1, prompt, strlen(prompt));
+    for (;;) {
+        char kb[16];
+        long n = read(0, kb, sizeof(kb));
+        if (n < 0) { ttymode(TTY_CANON); return -1; }    /* EINTR: Ctrl-C */
+        for (long i = 0; i < n; i++) {
+            char c = kb[i];
+            if (c == 0x1B) {                 /* ESC [ x — emitted atomically */
+                if (i + 2 >= n || kb[i + 1] != '[') continue;   /* lone ESC: ignore */
+                char x = kb[i + 2];
+                i += 2;
+                if (x == 'A' || x == 'B') {  /* history up / down */
+                    if (x == 'A') {
+                        if (hview == 0) continue;
+                        if (hview == hist_count) {       /* stash the in-progress line */
+                            for (int j = 0; j < len; j++) saved[j] = buf[j];
+                            saved_len = len;
+                        }
+                        hview--;
+                        strncpy(buf, hist[hview], sizeof(buf) - 1);
+                    } else {
+                        if (hview >= hist_count) continue;
+                        hview++;
+                        if (hview == hist_count) {       /* back to the stashed line */
+                            for (int j = 0; j < saved_len; j++) buf[j] = saved[j];
+                            buf[saved_len] = '\0';
+                        } else {
+                            strncpy(buf, hist[hview], sizeof(buf) - 1);
+                        }
+                    }
+                    buf[sizeof(buf) - 1] = '\0';
+                    len = pos = (int)strlen(buf);
+                } else if (x == 'D') { if (pos > 0) pos--; }         /* left  */
+                else if (x == 'C') { if (pos < len) pos++; }         /* right */
+                else if (x == 'H') { pos = 0; }                      /* home  */
+                else if (x == 'F') { pos = len; }                    /* end   */
+                redraw(prompt, buf, len, pos, drawn); drawn = len;
+                continue;
+            }
+            if (c == '\n') {                 /* finish: cursor to end, real newline */
+                redraw(prompt, buf, len, len, drawn);
+                write(1, "\n", 1);
+                buf[len] = '\0';
+                int cn = (len < outsz - 1) ? len : outsz - 1;
+                for (int j = 0; j < cn; j++) out[j] = buf[j];
+                out[cn] = '\0';
+                if (cn > 0 && (hist_count == 0 || strcmp(hist[hist_count - 1], out) != 0)) {
+                    if (hist_count == HIST_MAX) {        /* drop the oldest */
+                        for (int j = 0; j < HIST_MAX - 1; j++) strcpy(hist[j], hist[j + 1]);
+                        hist_count--;
+                    }
+                    strncpy(hist[hist_count], out, sizeof(hist[0]) - 1);
+                    hist[hist_count][sizeof(hist[0]) - 1] = '\0';
+                    hist_count++;
+                }
+                ttymode(TTY_CANON);
+                return cn;
+            }
+            if (c == '\b' || c == 0x7F) {    /* delete before the cursor */
+                if (pos > 0) {
+                    for (int j = pos - 1; j < len - 1; j++) buf[j] = buf[j + 1];
+                    pos--; len--;
+                    redraw(prompt, buf, len, pos, drawn); drawn = len;
+                }
+                continue;
+            }
+            if (c >= 0x20 && c < 0x7F && len < (int)sizeof(buf) - 1) {  /* insert */
+                for (int j = len; j > pos; j--) buf[j] = buf[j - 1];
+                buf[pos] = c;
+                len++; pos++;
+                redraw(prompt, buf, len, pos, drawn); drawn = len;
+            }
+        }
+    }
+}
+
 int main(int argc, char** argv) {
     /* sh -c "one command line" */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
@@ -313,19 +415,12 @@ int main(int argc, char** argv) {
     /* Interactive REPL: read(0) blocks in the kernel's canonical line
      * discipline (echo + backspace handled there), so this is a live shell. */
     signal(SIGINT, on_sigint);           /* Ctrl-C -> fresh prompt instead of dying */
-    printf("NyxOS sh v0.5 — 'demo', 'cd DIR', 'pwd', 'export N=v', '$N', 'a | b > f', 'CMD &', 'exit'\n");
+    printf("NyxOS sh v0.6 — line editing + history (arrows), 'demo', 'cd', '$N', 'a | b > f', '&', 'exit'\n");
     for (;;) {
         reap_bg();                       /* report finished background jobs */
-        write(1, "sh$ ", 4);
         char line[128];
-        long n = read(0, line, sizeof(line) - 1);
+        int n = readline("sh$ ", line, sizeof(line));
         if (n < 0) continue;             /* interrupted (Ctrl-C -> SIGINT): fresh prompt */
-        if (n == 0) {                    /* real EOF — leave */
-            printf("sh: no stdin, bye\n");
-            break;
-        }
-        if (line[n - 1] == '\n') n--;    /* strip the newline */
-        line[n] = '\0';
         char* t = trim(line);
         if (!*t) continue;
         char xbuf[192];                  /* $VAR / $? expansion happens before parsing */
