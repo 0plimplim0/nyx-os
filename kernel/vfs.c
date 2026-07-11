@@ -26,12 +26,25 @@ typedef struct vfs_node {
     char     mpath[MAX_NAME]; // path within the mount (e.g. "/foo.txt")
     void*    mount_ent;    // mount_entry_t* to flush writes through
     uint32_t dev_type;    // 0 = regular file; else a /dev special (DEV_* below)
+    uint32_t proc_type;   // 0 = not /proc; else a PROC_* generated node (below)
+    uint32_t proc_pid;    // for PROC_PID_* nodes: which process this reflects
 } vfs_node_t;
 
 /* Special device nodes under /dev. read/write of these bypass ino->data. */
 #define DEV_NULL    1     // reads -> EOF, writes discarded
 #define DEV_ZERO    2     // reads -> endless zero bytes, writes discarded
 #define DEV_RANDOM  3     // reads -> pseudo-random bytes, writes discarded
+
+/* Generated /proc nodes. Their content is synthesized on read (vfs_pread) from
+ * live kernel state — nothing is stored in ino->data. The per-pid dirs are
+ * created/removed on the fly by proc_sync() to track the process table. */
+#define PROC_MEMINFO     1   // MemTotal/MemUsed/MemFree
+#define PROC_UPTIME      2   // seconds since boot
+#define PROC_VERSION     3   // kernel version banner
+#define PROC_CPUINFO     4   // arch / cpu summary
+#define PROC_PID_DIR     5   // /proc/<pid> directory (proc_pid set)
+#define PROC_PID_STATUS  6   // /proc/<pid>/status  (proc_pid set)
+#define PROC_PID_CMDLINE 7   // /proc/<pid>/cmdline (proc_pid set)
 
 /* xorshift64 PRNG for /dev/random, lazily seeded from the tick counter. */
 static uint64_t dev_rng_state = 0;
@@ -171,6 +184,127 @@ static vfs_node_t* resolve_parent(const char* path, char* child_name) {
     return result;
 }
 
+// ==================== /proc (generated filesystem) ====================
+// /proc exposes live kernel state as readable text, synthesized on demand — the
+// static files (meminfo/uptime/version/cpuinfo) are created once at boot, while
+// the per-process /proc/<pid> dirs (+ status/cmdline) are reconciled with the
+// process table by proc_sync() at the VFS entry points ring 3 uses. No storage:
+// content is generated in vfs_pread, so nothing here occupies ino->data.
+
+static vfs_node_t* proc_node = NULL;   // the /proc directory node (cached at boot)
+
+// Create a child node of `parent` tagged as a /proc node. Returns it, or NULL if
+// the pool or the parent's child array is full (a partial /proc is acceptable).
+static vfs_node_t* proc_make(vfs_node_t* parent, const char* name, uint32_t type,
+                             uint32_t ptype, uint32_t pid) {
+    if (!parent || parent->child_count >= MAX_CHILDREN) return NULL;
+    vfs_node_t* n = alloc_node();
+    if (!n) return NULL;
+    strncpy(n->name, name, MAX_NAME - 1);
+    n->type = type;
+    n->proc_type = ptype;
+    n->proc_pid = pid;
+    n->parent = parent;
+    parent->children[parent->child_count++] = n;
+    return n;
+}
+
+// Unsigned base-10 into buf (NUL-terminated); returns the digit count.
+static int proc_utoa(uint32_t v, char* buf) {
+    char tmp[12]; int n = 0;
+    if (v == 0) tmp[n++] = '0';
+    while (v) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
+    for (int i = 0; i < n; i++) buf[i] = tmp[n - 1 - i];
+    buf[n] = '\0';
+    return n;
+}
+
+// Synthesize a /proc node's full text into buf; returns the byte length.
+static int proc_generate(vfs_node_t* ino, char* buf, int bufsz) {
+    extern uint64_t memory_total, memory_used;
+    extern volatile uint32_t tick_count;
+    buf[0] = '\0';
+    switch (ino->proc_type) {
+        case PROC_MEMINFO: {
+            uint32_t tot  = (uint32_t)(memory_total / 1024);
+            uint32_t used = (uint32_t)(memory_used  / 1024);
+            uint32_t freeb = (uint32_t)((memory_total > memory_used ?
+                                         memory_total - memory_used : 0) / 1024);
+            snprintf(buf, bufsz,
+                     "MemTotal: %u kB\nMemUsed:  %u kB\nMemFree:  %u kB\n",
+                     tot, used, freeb);
+            break;
+        }
+        case PROC_UPTIME: {
+            uint32_t ms = tick_count;            // 1000 Hz timer -> ms
+            snprintf(buf, bufsz, "%u.%02u\n", ms / 1000, (ms % 1000) / 10);
+            break;
+        }
+        case PROC_VERSION:
+            snprintf(buf, bufsz, "NyxOS version %s (x86_64)\n", KERNEL_VERSION);
+            break;
+        case PROC_CPUINFO:
+            snprintf(buf, bufsz, "arch\t: x86_64\nvendor\t: NyxOS\n");
+            break;
+        case PROC_PID_STATUS: {
+            process_t* p = find_process(ino->proc_pid);
+            if (p) {
+                const char* st = p->state == 1 ? "R (running)" :
+                                 p->state == 2 ? "Z (zombie)"  :
+                                 p->state == 3 ? "S (sleeping)" : "P (parked)";
+                snprintf(buf, bufsz, "Name:\t%s\nPid:\t%u\nPPid:\t%u\nState:\t%s\n",
+                         p->comm, p->pid, p->ppid, st);
+            }
+            break;
+        }
+        case PROC_PID_CMDLINE: {
+            process_t* p = find_process(ino->proc_pid);
+            if (p) snprintf(buf, bufsz, "%s\n", p->cmdline[0] ? p->cmdline : p->comm);
+            break;
+        }
+    }
+    return (int)strlen(buf);
+}
+
+// Reconcile /proc/<pid> dirs with the live process table: drop dead ones, add
+// new ones (each with status + cmdline children). Idempotent and cheap; called
+// at vfs_open / vfs_isdir so an open/getdents/chdir sees the current pids. The
+// node-pool churn is guarded — alloc/free plus the children[] edits run with
+// preemption off so a kernel-context FS caller can't race it.
+static void proc_sync(void) {
+    if (!proc_node) return;
+    extern process_t* process_table[];
+    extern int process_count;
+    preempt_disable();
+    // 1. Remove pid dirs whose process is gone (free their children first).
+    for (uint32_t i = 0; i < proc_node->child_count; ) {
+        vfs_node_t* c = proc_node->children[i];
+        if (c->proc_type == PROC_PID_DIR && !find_process(c->proc_pid)) {
+            for (uint32_t j = 0; j < c->child_count; j++) free_node(c->children[j]);
+            free_node(c);
+            proc_node->children[i] = proc_node->children[--proc_node->child_count];
+        } else i++;
+    }
+    // 2. Add a dir for each live process that lacks one.
+    for (int i = 0; i < process_count; i++) {
+        process_t* p = process_table[i];
+        if (!p || p->pid == 0) continue;
+        int have = 0;
+        for (uint32_t k = 0; k < proc_node->child_count; k++) {
+            vfs_node_t* c = proc_node->children[k];
+            if (c->proc_type == PROC_PID_DIR && c->proc_pid == p->pid) { have = 1; break; }
+        }
+        if (have) continue;
+        char name[12];
+        proc_utoa(p->pid, name);
+        vfs_node_t* d = proc_make(proc_node, name, 1, PROC_PID_DIR, p->pid);
+        if (!d) continue;                        // pool full — skip this pid
+        proc_make(d, "status",  0, PROC_PID_STATUS,  p->pid);
+        proc_make(d, "cmdline", 0, PROC_PID_CMDLINE, p->pid);
+    }
+    preempt_enable();
+}
+
 void init_vfs(void) {
     node_count = 0;
     vfs_node_t* root = alloc_node();
@@ -207,10 +341,24 @@ void init_vfs(void) {
         int dfd = vfs_open(devs[i].path, 1, 0);           // O_CREAT
         if (dfd >= 0) ((vfs_node_t*)(uintptr_t)(uint32_t)dfd)->dev_type = devs[i].dt;
     }
+
+    // /proc static files — generated on read (proc_generate); per-pid dirs are
+    // added later by proc_sync(). /proc was created by vfs_mkdir above.
+    proc_node = resolve_path("/proc");
+    static const struct { const char* name; uint32_t pt; } procf[] = {
+        {"meminfo", PROC_MEMINFO}, {"uptime", PROC_UPTIME},
+        {"version", PROC_VERSION}, {"cpuinfo", PROC_CPUINFO},
+    };
+    for (unsigned i = 0; i < sizeof(procf) / sizeof(procf[0]); i++)
+        proc_make(proc_node, procf[i].name, 0, procf[i].pt, 0);
 }
 
 int vfs_open(const char* path, int flags, mode_t mode) {
     (void)mode;
+
+    // Refresh /proc's per-pid dirs so an open/getdents under /proc sees the
+    // current process table (cheap no-op when nothing changed).
+    proc_sync();
 
     // Mount paths (e.g. /mnt/...) are backed by a real filesystem, not the
     // ramdisk tree. Create a transient node that mirrors the FS file so that
@@ -331,6 +479,15 @@ int vfs_pread(int fd, void* buf, uint32_t count, uint32_t offset) {
                              return (int)count;
         }
     }
+    if (ino->proc_type) {                      // /proc: content synthesized on read
+        char gbuf[512];
+        int len = proc_generate(ino, gbuf, sizeof(gbuf));
+        if (offset >= (uint32_t)len) return 0;
+        uint32_t avail = (uint32_t)len - offset;
+        if (count > avail) count = avail;
+        if (count) memcpy(buf, gbuf + offset, count);
+        return (int)count;
+    }
     if (offset >= ino->size) return 0;
     uint32_t avail = ino->size - offset;
     if (count > avail) count = avail;
@@ -373,6 +530,7 @@ int vfs_close(int fd) {
 // file). Mount points are directories too.
 int vfs_isdir(const char* path) {
     if (vfs_find_mount(path)) return 1;
+    proc_sync();                       // so `cd /proc/<pid>` resolves a live pid
     vfs_node_t* n = resolve_path(path);
     return (n && n->type == 1) ? 1 : 0;
 }

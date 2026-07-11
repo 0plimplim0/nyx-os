@@ -483,6 +483,38 @@ int main(void) {
         printf("    pid=%u ppid=%u state=%u comm=%s\n",
                plist[i].pid, plist[i].ppid, plist[i].state, plist[i].comm);
 
+    /* /proc pseudo-filesystem (generated VFS nodes — no new syscalls). Read a few
+     * static files, then our OWN /proc/<pid>/status — proving per-pid dirs appear
+     * on demand and reflect live process state. */
+    printf("Testing /proc filesystem...\n");
+    static char pbuf[256];
+    const char* pfiles[3];
+    pfiles[0] = "/proc/version"; pfiles[1] = "/proc/meminfo"; pfiles[2] = "/proc/uptime";
+    for (int i = 0; i < 3; i++) {
+        long pfd = open(pfiles[i], O_RDONLY, 0);
+        if (pfd >= 0) {
+            long n = read((int)pfd, pbuf, sizeof(pbuf) - 1);
+            if (n < 0) n = 0;
+            pbuf[n] = '\0';
+            printf("  %s (%ld B): %s", pfiles[i], n, pbuf);
+            close((int)pfd);
+        } else {
+            printf("  %s: open failed\n", pfiles[i]);
+        }
+    }
+    char spath[40];
+    sprintf(spath, "/proc/%d/status", (int)mypid);   /* user sprintf has no %l */
+    long stfd = open(spath, O_RDONLY, 0);
+    if (stfd >= 0) {
+        long n = read((int)stfd, pbuf, sizeof(pbuf) - 1);
+        if (n < 0) n = 0;
+        pbuf[n] = '\0';
+        printf("  %s:\n%s", spath, pbuf);
+        close((int)stfd);
+    } else {
+        printf("  %s: open failed\n", spath);
+    }
+
     printf("Init complete, exiting.\n");
     return 0;
 }

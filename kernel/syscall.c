@@ -579,7 +579,7 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             if (!copy) { vfs_close(fd); return -1; }
             memcpy_asm(copy, fdata, sz);
             vfs_close(fd);
-            int r = do_execve(copy, sz, kargv, argc);   // success -> returns into new image
+            int r = do_execve(copy, sz, kargv, argc, path);   // success -> returns into new image
             kfree(copy);
             return (uint64_t)(int64_t)r;
         }

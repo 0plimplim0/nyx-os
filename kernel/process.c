@@ -269,15 +269,32 @@ int do_fork(void) {
 }
 
 // SYS_EXECVE core: replace the calling process's image with the ELF in [data,size).
+// Set p->comm to the basename of `path`, dropping any leading directories and a
+// trailing ".elf" — so `ps` and `/proc/<pid>/status` show "spin"/"ps"/"init"
+// rather than the "elf" that elf_load hardcodes for every image.
+void proc_set_comm(process_t* p, const char* path) {
+    if (!p || !path) return;
+    const char* base = path;
+    for (const char* q = path; *q; q++) if (*q == '/') base = q + 1;
+    char tmp[32];
+    int i = 0;
+    for (; base[i] && i < 31; i++) tmp[i] = base[i];
+    tmp[i] = '\0';
+    if (i >= 4 && tmp[i-4] == '.' && tmp[i-3] == 'e' && tmp[i-2] == 'l' && tmp[i-1] == 'f')
+        tmp[i-4] = '\0';                       // drop the ".elf" suffix
+    if (tmp[0]) { strncpy(p->comm, tmp, 31); p->comm[31] = '\0'; }
+}
+
 // Loads the program into a fresh address space and swaps it in for the current
 // process — same pid, same fds — then builds a SysV entry stack from kargv
 // ([argc][argv pointers][NULL][envp NULL] above the strings) and rewrites this
 // syscall's saved user frame so the syscall "returns" into the new program's entry.
 // kargv[0..argc-1] are KERNEL-side strings (already copied out of the old address
 // space by the SYS_EXECVE case — the old image is gone by the time we build).
+// `path` is the exec'd file's path (for comm/cmdline; may be NULL).
 // Returns -1 on failure before the commit point (caller left intact); on success it
 // "returns" into the new image. Runs inside the syscall (interrupts masked).
-int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc) {
+int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc, const char* path) {
     extern uint64_t syscall_frame_ptr, user_rsp, user_cr3;
     process_t* self = get_current_process();
     if (!self || !self->page_directory) return -1;
@@ -285,6 +302,24 @@ int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc) 
 
     uint64_t* pd; uint64_t entry, stack_top, brk;
     if (elf_load_image(data, size, &pd, &entry, &stack_top, &brk) != 0) return -1;
+
+    // Name the process after the new image, and record its argv as the cmdline
+    // (space-joined) — both surfaced by ps / /proc. Done post-commit so a failed
+    // load leaves the old identity intact.
+    proc_set_comm(self, path);
+    {
+        int c = 0;
+        for (int i = 0; i < argc && c < (int)sizeof(self->cmdline) - 1; i++) {
+            if (i) self->cmdline[c++] = ' ';
+            for (const char* s = kargv[i]; *s && c < (int)sizeof(self->cmdline) - 1; s++)
+                self->cmdline[c++] = *s;
+        }
+        if (c == 0 && path) {                  // no argv -> fall back to the path
+            for (const char* s = path; *s && c < (int)sizeof(self->cmdline) - 1; s++)
+                self->cmdline[c++] = *s;
+        }
+        self->cmdline[c] = '\0';
+    }
 
     // Commit: swap in the new address space and free the old one. We run on the
     // kernel CR3, so freeing the old user pd is safe (its COW pages' refcounts drop;

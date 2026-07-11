@@ -869,6 +869,9 @@ int spawn_user_path(const char* path) {
     int r = elf_load(copy, size, &proc);
     kfree(copy);
     if (r != 0 || !proc) return -5;
+    proc_set_comm(proc, path); // name it after the file (elf_load hardcodes "elf")
+    strncpy(proc->cmdline, path, sizeof(proc->cmdline) - 1);
+    proc->cmdline[sizeof(proc->cmdline) - 1] = '\0';
     proc->sched_managed = 1;   // scheduler now round-robins this ring-3 process
     extern process_t* get_current_process(void);
     process_t* parent = get_current_process();
@@ -1752,6 +1755,9 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
                     if (elf_validate(copy, init_size)) {
                         process_t* init_proc = NULL;
                         if (elf_load(copy, init_size, &init_proc) == 0) {
+                            proc_set_comm(init_proc, "/init.elf");   // "init" not "elf"
+                            init_proc->cmdline[0] = '\0';
+                            strncpy(init_proc->cmdline, "/init.elf", sizeof(init_proc->cmdline) - 1);
                             printf("[INIT] Registered init PID=%u (scheduler will start it)\n", init_proc->pid);
                         } else {
                             printf("[INIT] ELF load failed\n");
