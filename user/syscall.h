@@ -32,6 +32,8 @@
 #define SYS_READKEY  28
 #define SYS_DLOPEN   29
 #define SYS_DLSYM    30
+#define SYS_TIME     31
+#define SYS_SLEEP    32
 
 #define TTY_CANON   0   /* kernel line discipline: echoed, backspace-edited lines */
 #define TTY_RAW     1   /* byte-at-a-time, no echo, arrows as ESC [ A/B/C/D */
@@ -96,6 +98,18 @@ typedef struct {
     unsigned int cpu_time;
     char comm[32];
 } nyx_procinfo_t;
+
+/* Broken-down local time from time() (SYS_TIME). Layout MUST match the kernel's
+ * 6-int buffer in syscall.c: {sec, min, hour, mday, mon, year} — year is the full
+ * 4-digit year, mon is 1..12, mday is 1..31. The record behind `date`. */
+typedef struct {
+    int sec;
+    int min;
+    int hour;
+    int mday;
+    int mon;
+    int year;
+} nyx_tm;
 
 /* x86_64 syscall ABI:
  *   RAX = syscall number
@@ -310,10 +324,27 @@ static inline long pipe(int fds[2]) {
 
 /* Replace the current process image with the program at `path`. On success it does
  * not return (the new program runs with the same pid and open fds); returns -1 only
- * on failure. argv/envp are accepted for signature compatibility but not yet passed
- * to the new program (crt0 uses argc=0). */
+ * on failure. Both argv and envp (NULL-terminated string arrays) are passed to the
+ * new program: crt0 reads argc/argv from the stack and sets `environ` from envp, so
+ * the child inherits its parent's environment. Pass 0 for either to omit it. */
 static inline long execve(const char* path, char* const argv[], char* const envp[]) {
     return syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp);
+}
+
+/* time(t): fill *t with the current broken-down local time from the RTC. Returns 0,
+ * or -1 on error. The primitive behind `date`. */
+static inline long time(nyx_tm* t) {
+    return syscall1(SYS_TIME, (long)t);
+}
+
+/* sleep_ms(ms): block this process for `ms` milliseconds (the scheduler runs other
+ * processes meanwhile). Returns 0, or a negative value if a signal interrupted it.
+ * sleep_sec(s) is the whole-seconds convenience form used by `sleep`. */
+static inline long sleep_ms(long ms) {
+    return syscall1(SYS_SLEEP, ms);
+}
+static inline long sleep_sec(long s) {
+    return syscall1(SYS_SLEEP, s * 1000);
 }
 
 /* Duplicate oldfd onto newfd (closing newfd first if open) — the redirection

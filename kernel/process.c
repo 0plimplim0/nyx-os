@@ -286,19 +286,22 @@ void proc_set_comm(process_t* p, const char* path) {
 }
 
 // Loads the program into a fresh address space and swaps it in for the current
-// process — same pid, same fds — then builds a SysV entry stack from kargv
-// ([argc][argv pointers][NULL][envp NULL] above the strings) and rewrites this
-// syscall's saved user frame so the syscall "returns" into the new program's entry.
-// kargv[0..argc-1] are KERNEL-side strings (already copied out of the old address
-// space by the SYS_EXECVE case — the old image is gone by the time we build).
+// process — same pid, same fds — then builds a SysV entry stack from kargv/kenvp
+// ([argc][argv pointers][NULL][envp pointers][NULL] above the strings) and rewrites
+// this syscall's saved user frame so the syscall "returns" into the new program's
+// entry. kargv[0..argc-1] and kenvp[0..envc-1] are KERNEL-side strings (already
+// copied out of the old address space by the SYS_EXECVE case — the old image is
+// gone by the time we build), so the child inherits its parent's environment.
 // `path` is the exec'd file's path (for comm/cmdline; may be NULL).
 // Returns -1 on failure before the commit point (caller left intact); on success it
 // "returns" into the new image. Runs inside the syscall (interrupts masked).
-int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc, const char* path) {
+int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc,
+              char* const* kenvp, int envc, const char* path) {
     extern uint64_t syscall_frame_ptr, user_rsp, user_cr3;
     process_t* self = get_current_process();
     if (!self || !self->page_directory) return -1;
     if (argc < 0) argc = 0;
+    if (envc < 0) envc = 0;
 
     uint64_t* pd; uint64_t entry, stack_top, brk;
     if (elf_load_image(data, size, &pd, &entry, &stack_top, &brk) != 0) return -1;
@@ -342,15 +345,17 @@ int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc, 
     self->tty_raw = 0;           // new image gets the canonical stdin discipline
     if (old_pd) free_page_directory(old_pd);
 
-    // Build the argv frame on the NEW stack. copy_to_user translates through
+    // Build the argv+envp frame on the NEW stack. copy_to_user translates through
     // user_cr3, so point it at the new pd first; the writes land in the fresh
     // stack page via the identity map. Strings go at the very top (overwriting
-    // elf_load_image's empty frame), the qword frame below them:
-    //   [sp] = argc, [sp+8..] = argv[0..argc-1], NULL, envp NULL.
+    // elf_load_image's empty frame), the qword frame below them, in SysV order:
+    //   [sp] = argc, [sp+8..] = argv[0..argc-1], NULL, envp[0..envc-1], NULL.
+    // crt0 reads argc/argv from [rsp] and derives environ = &argv[argc+1].
     user_cr3 = (uint64_t)pd;
     uint64_t sp = (stack_top + 0xFFF) & ~0xFFFULL;      // raw top of the stack page
-    uint64_t uargv[9];                                   // user VAs of the strings (max 8)
     if (argc > 8) argc = 8;
+    if (envc > 16) envc = 16;
+    uint64_t uargv[9];                                   // user VAs of the argv strings (max 8)
     for (int i = argc - 1; i >= 0; i--) {
         uint64_t len = strlen(kargv[i]) + 1;
         sp -= len;
@@ -358,14 +363,23 @@ int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc, 
         uargv[i] = sp;
     }
     uargv[argc] = 0;                                     // argv terminator
+    uint64_t uenvp[17];                                  // user VAs of the envp strings (max 16)
+    for (int i = envc - 1; i >= 0; i--) {
+        uint64_t len = strlen(kenvp[i]) + 1;
+        sp -= len;
+        copy_to_user(sp, kenvp[i], len);
+        uenvp[i] = sp;
+    }
+    uenvp[envc] = 0;                                     // envp terminator
     sp &= ~0xFULL;                                       // align, then the qword frame:
-    int qwords = argc + 3;                               // argc + argv[] + NULL + envp NULL
+    int qwords = 1 + (argc + 1) + (envc + 1);            // argc + argv[]+NULL + envp[]+NULL
     if (qwords & 1) qwords++;                            // keep entry RSP 16-byte aligned
     sp -= (uint64_t)qwords * 8;
-    uint64_t argc64 = (uint64_t)argc, zero = 0;
-    copy_to_user(sp, &argc64, 8);
-    copy_to_user(sp + 8, uargv, ((uint64_t)argc + 1) * 8);
-    copy_to_user(sp + 8 + ((uint64_t)argc + 1) * 8, &zero, 8);   // empty envp
+    uint64_t argc64 = (uint64_t)argc;
+    uint64_t off = 0;
+    copy_to_user(sp + off, &argc64, 8);                          off += 8;
+    copy_to_user(sp + off, uargv, ((uint64_t)argc + 1) * 8);     off += ((uint64_t)argc + 1) * 8;
+    copy_to_user(sp + off, uenvp, ((uint64_t)envc + 1) * 8);     // envp[] + NULL
 
     // Rewrite the saved syscall frame: [0..14]=GPRs (r15..rax), [15]=RFLAGS, [16]=RIP.
     // Zero the GPRs (rdi/rsi = argc/argv as a courtesy for register-based entry

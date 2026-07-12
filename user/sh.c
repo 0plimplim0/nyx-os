@@ -94,6 +94,23 @@ static void env_set(const char* name, const char* val) {
     env_count++;
 }
 
+/* Flatten the shell env into a NULL-terminated "NAME=VALUE" vector for execve, so
+ * children inherit it (and `env` can print it). Static storage: the caller is a
+ * forked child about to execve, and the kernel copies the strings before the new
+ * image is built. */
+static char** env_build(void) {
+    static char store[MAX_ENV][160];
+    static char* envp[MAX_ENV + 1];
+    int n = 0;
+    for (int i = 0; i < env_count && n < MAX_ENV; i++) {
+        snprintf(store[n], sizeof(store[n]), "%s=%s", env_name[i], env_val[i]);
+        envp[n] = store[n];
+        n++;
+    }
+    envp[n] = 0;
+    return envp;
+}
+
 static int is_name_char(char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9') || c == '_';
@@ -232,7 +249,7 @@ static void run_line(char* line) {
             }
             char path[64];
             resolve(av[0], path);
-            execve(path, av, 0);
+            execve(path, av, env_build());   /* child inherits the shell environment */
             printf("sh: %s: not found\n", path);
             exit(127);
         } else if (pid < 0) {
@@ -520,6 +537,14 @@ static int readline(const char* prompt, char* out, int outsz) {
 }
 
 int main(int argc, char** argv) {
+    /* Seed a default environment so children (and `env`) see something out of the
+     * box; `export NAME=value` adds to it, and every command inherits it. */
+    env_set("USER", "nyx");
+    env_set("HOME", "/home/user");
+    env_set("SHELL", "/sh.elf");
+    env_set("PATH", "/");
+    env_set("TERM", "nyx");
+
     /* sh -c "one command line" */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         char buf[128];

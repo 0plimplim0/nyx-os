@@ -49,7 +49,7 @@ USER_ELFS = $(USER_DIR)/hello.elf $(USER_DIR)/init.elf $(USER_DIR)/spin.elf $(US
             $(USER_DIR)/grep.elf $(USER_DIR)/head.elf $(USER_DIR)/tail.elf \
             $(USER_DIR)/mkdir.elf $(USER_DIR)/rm.elf $(USER_DIR)/touch.elf $(USER_DIR)/sort.elf $(USER_DIR)/find.elf \
             $(USER_DIR)/ps.elf $(USER_DIR)/kill.elf $(USER_DIR)/top.elf $(USER_DIR)/edit.elf $(USER_DIR)/dltest.elf \
-            $(USER_DIR)/pmap.elf $(USER_DIR)/free.elf
+            $(USER_DIR)/pmap.elf $(USER_DIR)/free.elf $(USER_DIR)/env.elf $(USER_DIR)/date.elf $(USER_DIR)/sleep.elf
 
 # Flags for Nyx C output (GCC: statement-exprs, __auto_type). -mno-red-zone is mandatory.
 NYXCFLAGS = -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR)
@@ -146,6 +146,15 @@ $(USER_DIR)/pmap.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/pmap.o
 $(USER_DIR)/free.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/free.o
 	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/free.o
 
+$(USER_DIR)/env.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/env.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/env.o
+
+$(USER_DIR)/date.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/date.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/date.o
+
+$(USER_DIR)/sleep.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/sleep.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/sleep.o
+
 $(USER_DIR)/sh.o: $(USER_DIR)/sh.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
@@ -210,6 +219,15 @@ $(USER_DIR)/pmap.o: $(USER_DIR)/pmap.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
 $(USER_DIR)/free.o: $(USER_DIR)/free.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
+	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
+
+$(USER_DIR)/env.o: $(USER_DIR)/env.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
+	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
+
+$(USER_DIR)/date.o: $(USER_DIR)/date.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
+	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
+
+$(USER_DIR)/sleep.o: $(USER_DIR)/sleep.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
 $(USER_DIR)/crt0.o: $(USER_DIR)/crt0.asm

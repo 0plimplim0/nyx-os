@@ -34,4 +34,8 @@ int snprintf(char* buf, size_t size, const char* fmt, ...);
 int atoi(const char* s);
 int abs(int x);
 
+/* Process environment (set by crt0 from execve's envp). getenv reads it. */
+extern char** environ;
+char* getenv(const char* name);
+
 #endif

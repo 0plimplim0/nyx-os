@@ -4,17 +4,22 @@ BITS 64
 
 global _start
 extern main
+extern environ
 
 section .text
 _start:
     ; SysV-style entry stack, built by the kernel for every user launch:
     ;   [rsp]   = argc
-    ;   [rsp+8] = argv[0..argc-1], NULL          (then an envp NULL)
-    ; elf_load_image writes an empty frame (argc=0) for plain spawns;
-    ; execve() builds the real one from the caller's argv.
-    mov rdi, [rsp]      ; argc
-    lea rsi, [rsp+8]    ; argv
-    call main
+    ;   [rsp+8] = argv[0..argc-1], NULL, envp[0..], NULL
+    ; elf_load_image writes an empty frame (argc=0, both NULLs) for plain spawns;
+    ; execve() builds the real one from the caller's argv + envp.
+    mov rdi, [rsp]          ; argc
+    lea rsi, [rsp+8]        ; argv
+    ; envp = &argv[argc+1] = rsp + 8 + (argc+1)*8  (past argv's NULL terminator)
+    lea rdx, [rdi+1]        ; argc + 1
+    lea rdx, [rsp + rdx*8 + 8]  ; -> envp
+    mov [environ], rdx      ; publish it as the libc `environ` global (getenv reads it)
+    call main              ; main(argc, argv, envp) — extra arg ignored by 2-arg mains
 
     ; exit(rax)
     mov rdi, rax

@@ -233,6 +233,45 @@ static int stdin_readkey(uint32_t timeout_ms) {
     return result;
 }
 
+/* Block the caller for `ms` milliseconds (SYS_SLEEP). Uses the timer wait queue:
+ * mark ourselves PROC_BLOCKED with a wake_tick and yield, so the scheduler runs
+ * other threads and irq_scheduler_tick wakes us once tick_count reaches the
+ * deadline — no busy spin. This is the kernel sleep() body plus the mid-syscall
+ * discipline every blocking syscall follows: `blocked_in_kernel` so the scheduler
+ * resumes us on the KERNEL CR3 (we park in ring 0), and the shared user_cr3/user_rsp
+ * globals saved on entry / restored before return so the asm path iretq's back into
+ * THIS process. A pending signal (e.g. Ctrl-C) cuts the sleep short with -EINTR. */
+static int do_sleep_ms(uint32_t ms) {
+    extern volatile uint32_t tick_count;         /* 1000 Hz -> milliseconds */
+    extern uint64_t user_cr3, user_rsp;
+    process_t* self = get_cur_proc();
+    uint64_t saved_cr3 = user_cr3, saved_ursp = user_rsp;
+    uint32_t deadline = tick_count + ms;         /* wrap-safe via signed compare */
+    int result = 0;
+    for (;;) {
+        /* cli makes the deadline check + block atomic vs. the waking tick. */
+        __asm__ volatile("cli");
+        if ((int32_t)(tick_count - deadline) >= 0) { __asm__ volatile("sti"); break; }
+        if (self && signal_pending(self)) { __asm__ volatile("sti"); result = -EINTR; break; }
+        if (self) {
+            self->blocked_in_kernel = 1;         /* resume us on the kernel CR3 */
+            self->wake_tick = deadline;          /* irq_scheduler_tick wakes us here */
+            self->state = PROC_BLOCKED;
+        }
+        __asm__ volatile("sti; hlt");            /* parked until the scheduler wakes us */
+        __asm__ volatile("cli");
+        if (self) {
+            self->blocked_in_kernel = 0;
+            self->wake_tick = 0;
+            if (self->state == PROC_BLOCKED) self->state = PROC_RUN;
+        }
+        __asm__ volatile("sti");
+    }
+    user_cr3 = saved_cr3;
+    user_rsp = saved_ursp;
+    return result;
+}
+
 /* ------------------------------------------------------------------ */
 /*  User memory access                                                */
 /* ------------------------------------------------------------------ */
@@ -576,11 +615,11 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
         }
         case SYS_EXECVE: {
             // execve(path, argv, envp): replace the caller's image with the ELF at
-            // `path`, passing argv onto the new program's entry stack (SysV layout,
-            // read by crt0). argv is a NULL-terminated user array of user string
-            // pointers — copied into kernel buffers HERE, while the old address
+            // `path`, passing argv AND envp onto the new program's entry stack (SysV
+            // layout, read by crt0). Both are NULL-terminated user arrays of user
+            // string pointers — copied into kernel buffers HERE, while the old address
             // space still exists (do_execve destroys it before building the new
-            // stack). Limits: 8 args of 63 chars. envp (a3) still ignored. On
+            // stack). Limits: 8 args of 63 chars, 16 env entries of 159 chars. On
             // success the syscall returns into the new program; on failure -1.
             if (!user_str_ok(a1)) return -1;
             char path[128];
@@ -598,6 +637,19 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
                     kargv[argc] = kargv_store[argc];
                 }
             }
+            static char kenvp_store[16][160];  /* NAME=VALUE strings, copied in like argv */
+            char* kenvp[16];
+            int envc = 0;
+            if (a3) {
+                for (; envc < 16; envc++) {
+                    uint64_t uptr = 0;
+                    if (copy_from_user(&uptr, a3 + (uint64_t)envc * 8, 8) != 0) return -1;
+                    if (!uptr) break;                    /* NULL terminator */
+                    if (!user_str_ok(uptr)) return -1;
+                    if (copy_str_from_user(kenvp_store[envc], uptr, 160) != 0) return -1;
+                    kenvp[envc] = kenvp_store[envc];
+                }
+            }
             int fd = vfs_open(path, 0, 0);
             if (fd < 0) return -1;
             uint32_t sz = vfs_fsize(fd);
@@ -607,7 +659,7 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             if (!copy) { vfs_close(fd); return -1; }
             memcpy_asm(copy, fdata, sz);
             vfs_close(fd);
-            int r = do_execve(copy, sz, kargv, argc, path);   // success -> returns into new image
+            int r = do_execve(copy, sz, kargv, argc, kenvp, envc, path);   // success -> returns into new image
             kfree(copy);
             return (uint64_t)(int64_t)r;
         }
@@ -835,6 +887,25 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             if (copy_str_from_user(name, a2, sizeof(name)) != 0) return 0;
             return do_dlsym((long)a1, name);
         }
+        case SYS_TIME: {
+            // time(buf): read the real-time clock and write the broken-down local
+            // time into the user's 6-int buffer {sec,min,hour,mday,mon,year}. Ints
+            // (not the kernel's packed rtc_time_t) give ring 3 a stable, padding-free
+            // ABI — the primitive behind `date`. Returns 0, or -1 on a bad pointer.
+            int t[6];
+            if (!user_ptr_ok(a1, sizeof(t))) return -1;
+            rtc_time_t rt;
+            rtc_read_time(&rt);
+            t[0] = rt.second; t[1] = rt.minute; t[2] = rt.hour;
+            t[3] = rt.day;    t[4] = rt.month;  t[5] = rt.year;
+            if (copy_to_user(a1, t, sizeof(t)) != 0) return -1;
+            return 0;
+        }
+        case SYS_SLEEP:
+            // sleep_ms(ms): block the caller for `ms` milliseconds on the timer wait
+            // queue (the scheduler runs others meanwhile). Returns 0, or -EINTR if a
+            // signal interrupted the wait. The primitive behind `sleep`.
+            return (uint64_t)(int64_t)do_sleep_ms((uint32_t)a1);
         default:
             printf("[SYSCALL] Unknown syscall %lu\n", no);
             return -1;

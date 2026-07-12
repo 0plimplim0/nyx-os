@@ -532,6 +532,39 @@ int main(void) {
     long rk = readkey(150);
     printf("  readkey(150ms) -> %ld (expect 0)\n", rk);
 
+    /* Real-time clock (SYS_TIME, the primitive behind `date`): read the broken-down
+     * local time and print it ISO-style. */
+    printf("Testing date/time (RTC via SYS_TIME)...\n");
+    nyx_tm tmv;
+    if (time(&tmv) == 0)
+        printf("  time() -> %04d-%02d-%02d %02d:%02d:%02d\n",
+               tmv.year, tmv.mon, tmv.mday, tmv.hour, tmv.min, tmv.sec);
+    else
+        printf("  time() failed\n");
+
+    /* sleep (SYS_SLEEP): block ~200ms on the timer wait queue and return 0. The
+     * shell demonstrates a longer, visible `sleep 2` — here we just confirm it
+     * returns without hanging or panicking. */
+    printf("Testing sleep (SYS_SLEEP, ~200ms)...\n");
+    long sr = sleep_ms(200);
+    printf("  sleep_ms(200) -> %ld (returned, expect 0)\n", sr);
+
+    /* Environment inheritance: fork a child, execve /env.elf with a 2-var envp, and
+     * let it print the environment. Exercises the full round-trip — the kernel copies
+     * envp onto the new stack, crt0 publishes it as `environ`, env reads it back. */
+    printf("Testing environment inheritance (execve envp -> env)...\n");
+    long epid = fork();
+    if (epid == 0) {
+        char* av[] = { "env", 0 };
+        char* ev[] = { "FOO=bar", "NYX=os", 0 };
+        execve("/env.elf", av, ev);
+        exit(1);
+    } else if (epid > 0) {
+        int st = 0;
+        printf("  $ env   (child env: FOO=bar NYX=os)\n");
+        waitpid((int)epid, &st);
+    }
+
     printf("Init complete, exiting.\n");
     return 0;
 }

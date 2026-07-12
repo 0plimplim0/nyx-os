@@ -1,6 +1,11 @@
 /* nyxrt.c — Nyx C runtime implementation. Freestanding, no libc calls. */
 #include "nyxrt.h"
 
+/* crt0 publishes the process environment here (it references `environ` on every
+ * launch). Nyx C programs link nyxrt instead of libc, so the symbol must live here
+ * too — even though nothing in the Nyx runtime reads it yet. */
+char** environ = 0;
+
 nyx_str __nyx_fmt_begin(char* buf, nyx_u64 cap) {
     (void)cap;
     if (cap) buf[0] = '\0';

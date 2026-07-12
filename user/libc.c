@@ -189,6 +189,23 @@ int abs(int x) {
     return x < 0 ? -x : x;
 }
 
+/* The process environment: a NULL-terminated array of "NAME=VALUE" strings. crt0
+ * points this at the envp vector the kernel laid on the entry stack (built by
+ * execve from the parent's environment), so a child inherits its parent's env. */
+char** environ = 0;
+
+/* getenv(name): return the value of environment variable `name`, or NULL. Scans
+ * `environ` for a "name=" prefix and returns the text after the '='. */
+char* getenv(const char* name) {
+    if (!environ) return 0;
+    size_t n = strlen(name);
+    for (char** e = environ; *e; e++) {
+        const char* s = *e;
+        if (strncmp(s, name, n) == 0 && s[n] == '=') return (char*)(s + n + 1);
+    }
+    return 0;
+}
+
 /* =========== Stdio =========== */
 
 void putchar(int c) {

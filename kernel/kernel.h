@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.31"
+#define KERNEL_VERSION "5.8.32"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -104,6 +104,8 @@ typedef __builtin_va_list va_list;
 #define SYS_READKEY  28
 #define SYS_DLOPEN   29
 #define SYS_DLSYM    30
+#define SYS_TIME     31
+#define SYS_SLEEP    32
 
 /* SYS_TTYMODE modes. Canonical: read(0) returns a full line, echoed + backspace-
  * edited by the kernel. Raw: read(0) returns bytes as they arrive, NO echo, and
@@ -735,7 +737,8 @@ vma_t*   vma_find(process_t* p, uint64_t addr);      // vm_handle_fault lookup
 void     vm_protect_range(uint64_t* pml4, uint64_t start, uint64_t end, int prot); // paging.c
 void     mmap_free_bufs(process_t* p);               // release file-backed snapshots at reap
 int do_execve(const uint8_t* data, uint32_t size,
-              char* const* kargv, int argc, const char* path); // SYS_EXECVE: replace caller's image; -1 on failure
+              char* const* kargv, int argc,
+              char* const* kenvp, int envc, const char* path); // SYS_EXECVE: replace caller's image; -1 on failure
 void proc_set_comm(process_t* p, const char* path); // set comm to basename(path) minus ".elf"
 int copy_to_user(uint64_t udst, const void* src, uint64_t len); // via user_cr3 page walk (syscall.c)
 void free_page_directory(uint64_t* pml4);           // free a user address space (COW-refcount aware)
