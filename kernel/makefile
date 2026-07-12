@@ -27,7 +27,7 @@ OBJS_KERNEL = boot.o kernel.o gdt.o idt.o isr.o isr_stubs.o irq.o \
         vbe.o fb.o mouse.o gui.o font.o compositor.o speaker.o tcp.o \
         sb16.o terminal_win.o fileman_win.o paint_win.o taskman_win.o \
         editor_win.o imageview_win.o soundtest_win.o calc_win.o \
-        elf.o initramfs.o rtc.o apic.o dns.o http.o smp.o trampoline.o bootsplash.o auth.o login.o sha256.o
+        elf.o initramfs.o rtc.o apic.o dns.o http.o smp.o trampoline.o bootsplash.o auth.o login.o sha256.o shared_libc.o
 
 OBJS = $(OBJS_KERNEL)
 
@@ -65,69 +65,69 @@ $(USER_DIR)/fdleak.elf: $(USER_DIR)/fdleak.asm
 	nasm -f elf64 $< -o $(USER_DIR)/fdleak.o
 	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/fdleak.o
 
-$(USER_DIR)/init.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/init.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/init.o
+$(USER_DIR)/init.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/init.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/init.o
 
-$(USER_DIR)/args.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/args.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/args.o
+$(USER_DIR)/args.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/args.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/args.o
 
 $(USER_DIR)/args.o: $(USER_DIR)/args.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
 # The userspace shell + its coreutils (crt0 + libc + program)
-$(USER_DIR)/sh.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/sh.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/sh.o
+$(USER_DIR)/sh.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/sh.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/sh.o
 
-$(USER_DIR)/echo.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/echo.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/echo.o
+$(USER_DIR)/echo.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/echo.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/echo.o
 
-$(USER_DIR)/upper.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/upper.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/upper.o
+$(USER_DIR)/upper.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/upper.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/upper.o
 
-$(USER_DIR)/cat.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/cat.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/cat.o
+$(USER_DIR)/cat.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/cat.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/cat.o
 
-$(USER_DIR)/wc.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/wc.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/wc.o
+$(USER_DIR)/wc.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/wc.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/wc.o
 
-$(USER_DIR)/ls.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/ls.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/ls.o
+$(USER_DIR)/ls.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/ls.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/ls.o
 
-$(USER_DIR)/grep.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/grep.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/grep.o
+$(USER_DIR)/grep.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/grep.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/grep.o
 
-$(USER_DIR)/mkdir.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/mkdir.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/mkdir.o
+$(USER_DIR)/mkdir.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/mkdir.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/mkdir.o
 
-$(USER_DIR)/rm.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/rm.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/rm.o
+$(USER_DIR)/rm.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/rm.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/rm.o
 
-$(USER_DIR)/touch.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/touch.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/touch.o
+$(USER_DIR)/touch.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/touch.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/touch.o
 
-$(USER_DIR)/sort.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/sort.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/sort.o
+$(USER_DIR)/sort.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/sort.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/sort.o
 
-$(USER_DIR)/find.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/find.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/find.o
+$(USER_DIR)/find.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/find.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/find.o
 
-$(USER_DIR)/head.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/head.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/head.o
+$(USER_DIR)/head.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/head.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/head.o
 
-$(USER_DIR)/tail.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/tail.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/tail.o
+$(USER_DIR)/tail.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/tail.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/tail.o
 
-$(USER_DIR)/ps.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/ps.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/ps.o
+$(USER_DIR)/ps.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/ps.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/ps.o
 
-$(USER_DIR)/kill.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/kill.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/kill.o
+$(USER_DIR)/kill.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/kill.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/kill.o
 
-$(USER_DIR)/top.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/top.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/top.o
+$(USER_DIR)/top.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/top.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/top.o
 
-$(USER_DIR)/edit.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/edit.o
-	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o $(USER_DIR)/libc.o $(USER_DIR)/edit.o
+$(USER_DIR)/edit.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/edit.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/edit.o
 
 $(USER_DIR)/sh.o: $(USER_DIR)/sh.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
@@ -201,12 +201,20 @@ $(USER_DIR)/hello_nyx.o: $(USER_DIR)/hello_nyx.c $(USER_DIR)/nyxrt.h
 $(USER_DIR)/libc.o: $(USER_DIR)/libc.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
+# Shared libc: libc.o prelinked at the fixed VA SHARED_LIBC_BASE (0x30000000). The
+# kernel loads this at boot and maps it into every process; programs link against
+# it with --just-symbols (above) instead of bundling libc.o. (-e 0 silences the
+# missing-_start warning; libc.so has no entry point — it's never executed as a
+# program.) It ships in the initramfs (see mkinitramfs) as /libc.so.
+$(USER_DIR)/libc.so: $(USER_DIR)/libc.o
+	$(LD) -nostdlib -m elf_x86_64 -e 0 -Ttext 0x30000000 -o $@ $(USER_DIR)/libc.o
+
 $(USER_DIR)/init.o: $(USER_DIR)/init.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
 # Generate initramfs C header
 MKINITRAMFS = ../tools/mkinitramfs.py
-initramfs_data.h: $(MKINITRAMFS) $(USER_ELFS)
+initramfs_data.h: $(MKINITRAMFS) $(USER_ELFS) $(USER_DIR)/libc.so
 	python3 $(MKINITRAMFS) $@ c
 
 initramfs.o: initramfs.c initramfs_data.h

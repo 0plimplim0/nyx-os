@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.26"
+#define KERNEL_VERSION "5.8.28"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -165,6 +165,18 @@ typedef __builtin_va_list va_list;
 #define MMAP_BASE  0x100000000ULL
 #define MMAP_MAX   0x0000700000000000ULL
 #define PROC_MAX_VMAS 16
+
+/* Shared libc (v5.8.28). One copy of libc's code is loaded at boot and mapped
+ * read-only into every user process at this fixed VA, so programs link against
+ * it (ld --just-symbols) instead of each bundling ~14 KB of libc. It sits within
+ * ±2 GiB of the program at 0x10000 (so direct rel32 calls reach it), and the heap
+ * cap (SYS_SBRK) is kept just below it. libc's tiny writable .bss (the malloc
+ * freelist head) is given a private per-process page. */
+#define SHARED_LIBC_BASE 0x30000000ULL
+void shared_libc_load(void);            // parse + load /libc.so into shared frames (boot)
+void shared_libc_map(uint64_t* pml4);   // map it into a process's address space
+int  shared_libc_is_ready(void);
+void map_page_ro(uint64_t* pml4, void* phys, void* virt, int exec);  // paging.c: RO user page
 
 typedef struct {
     uint64_t start;      // page-aligned base VA (inclusive)

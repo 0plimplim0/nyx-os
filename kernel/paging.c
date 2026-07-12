@@ -231,6 +231,18 @@ static uint64_t* pte_ptr(uint64_t* pml4, uint64_t virt, int create) {
     return &tbl[idx[3]];
 }
 
+// Map a READ-ONLY user page (present, user, not writable; NX unless exec). Used
+// for the shared libc: the same physical frame is mapped into many processes, so
+// it must NOT be writable (map_page_dir would force PAGE_WRITABLE). The caller
+// page_incref()s the frame so process teardown's refcount-aware free() balances.
+void map_page_ro(uint64_t* pml4, void* phys, void* virt, int exec) {
+    uint64_t* pte = pte_ptr(pml4, (uint64_t)virt, 1);
+    if (!pte) return;
+    uint64_t f = PAGE_PRESENT | PAGE_USER;
+    if (!exec) f |= PAGE_NX;
+    *pte = ((uint64_t)phys & PTE_ADDR_MASK) | f;
+}
+
 // Called from the #PF handler. Returns 1 if the fault was a demand/COW page it
 // resolved (retry the instruction), 0 for a genuine fault (let it panic).
 int vm_handle_fault(uint64_t cr2, uint64_t err) {

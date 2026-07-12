@@ -102,6 +102,11 @@ int elf_load_image(const uint8_t* data, uint32_t size, uint64_t** out_pd,
         if (end > max_addr) max_addr = end;
     }
 
+    // Map the shared libc (read-only code + private .bss) into this address space
+    // so the program's `--just-symbols` calls to printf/malloc/... resolve. fork
+    // inherits it via clone_page_directory_cow; a no-op if libc didn't load.
+    shared_libc_map(pd);
+
     *out_pd = pd;
     *out_entry = entry;
     *out_stack_top = stack_virt + 4096 - 32;   // entry RSP points at the argc frame

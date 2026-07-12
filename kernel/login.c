@@ -2,6 +2,19 @@
 #include "login.h"
 #include "auth.h"
 #include "font.h"
+#include "nyx_logo.h"
+
+// The login background is a vertical gradient. Sampling its color at a given row
+// lets the moon logo blend in seamlessly (font_draw_char always fills the cell
+// background, so we hand it the gradient color under each glyph row).
+static uint32_t login_grad(uint32_t y, uint32_t fh) {
+    uint32_t t = y * 255 / fh;
+    uint32_t r = 12 + t * 14 / 255, g = 16 + t * 16 / 255, b = 26 + t * 22 / 255;
+    if (r > 30) r = 30;
+    if (g > 40) g = 40;
+    if (b > 55) b = 55;
+    return fb_rgb(r, g, b);
+}
 
 extern volatile char kbd_buffer[256];
 extern volatile int kbd_head;
@@ -34,23 +47,30 @@ int login_screen(void) {
 
     serial_puts("[LOGIN] Drawing...\n");
 
-    for (uint32_t y = 0; y < fh; y++) {
-        uint32_t t = y * 255 / fh;
-        uint8_t r = 12 + t * 14 / 255, g = 16 + t * 16 / 255, b = 26 + t * 22 / 255;
-        if (r > 30) r = 30;
-        if (g > 40) g = 40;
-        if (b > 55) b = 55;
-        fb_fill_rect(0, y, fw, 1, fb_rgb(r, g, b));
-    }
+    for (uint32_t y = 0; y < fh; y++)
+        fb_fill_rect(0, y, fw, 1, login_grad(y, fh));
 
     int px = (fw - 360) / 2, py = fh / 2 - 100;
+
+    // NyxOS crescent-moon logo (same art as `nyxfetch`) above the login box, in
+    // brand purple, each glyph row drawn over the matching gradient color so the
+    // logo blends into the background rather than sitting on a flat panel.
+    const uint32_t moon = fb_rgb(168, 138, 245);        // NyxOS purple
+    int moon_w = NYX_LOGO_COLS * FONT_WIDTH;
+    int moon_x = (int)(fw - moon_w) / 2;
+    int moon_top = py - NYX_LOGO_ROWS * FONT_HEIGHT - 14;
+    if (moon_top < 4) moon_top = 4;
+    for (int i = 0; i < NYX_LOGO_ROWS; i++) {
+        int y = moon_top + i * FONT_HEIGHT;
+        font_draw_string(moon_x, y, NYX_LOGO[i], moon, login_grad((uint32_t)y, fh));
+    }
     fb_fill_rect(px, py, 360, 210, fb_rgb(25,30,42));
     fb_fill_rect(px-1, py-1, 362, 1, fb_rgb(60,65,80));
     fb_fill_rect(px-1, py+210, 362, 1, fb_rgb(40,45,55));
     fb_fill_rect(px-1, py, 1, 210, fb_rgb(60,65,80));
     fb_fill_rect(px+360, py, 1, 210, fb_rgb(40,45,55));
 
-    font_draw_string((fw-12*8)/2, py+10, "NyxOS Login", fb_rgb(180,210,240), fb_rgb(25,30,42));
+    font_draw_string((fw-12*8)/2, py+10, "NyxOS Login", fb_rgb(190,168,245), fb_rgb(25,30,42));
     fb_fill_rect(px+20, py+30, 320, 1, fb_rgb(55,60,75));
     font_draw_string(px+20, py+45, "Username:", fb_rgb(150,170,200), fb_rgb(25,30,42));
     font_draw_string(px+20, py+98, "Password:", fb_rgb(150,170,200), fb_rgb(25,30,42));

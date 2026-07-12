@@ -6,10 +6,10 @@
   <strong>Custom x86_64 kernel · C and Assembly · General-purpose OS</strong>
   <br/><br/>
   <!-- Badges -->
-  <a href="https://github.com/kazah-png/nyx-os/releases/tag/v5.8.26">
-    <img src="https://img.shields.io/badge/release-v5.8.26-00ff9d?style=flat" />
+  <a href="https://github.com/kazah-png/nyx-os/releases/tag/v5.8.28">
+    <img src="https://img.shields.io/badge/release-v5.8.28-00ff9d?style=flat" />
   </a>
-  <img src="https://img.shields.io/badge/status-v5.8.26-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/status-v5.8.28-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/TCP-yes-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/GUI-window%20compositor-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/%F0%9F%8C%99%20NyxC-runtime-8b5cf6?style=flat" />
@@ -38,7 +38,7 @@ nyx:root$ nyxfetch
     .:oo.. :o.              -----------------
   :oo:.oo.o:                OS:         NyxOS x86_64
  .#o:.   :.                 Host:       QEMU Standard PC
- #:::....:                  Kernel:     NyxOS 5.8.26 (GUI Suite)
+ #:::....:                  Kernel:     NyxOS 5.8.28 (GUI Suite)
 o#::. . o.                  Uptime:     00:00:11
 o#.o:   :o                  Resolution: 1024 x 768
 o###o   o#                  CPU:        QEMU Virtual CPU version 2.5+ (1)
@@ -70,12 +70,12 @@ The project implements core kernel primitives, a custom network stack (RTL8139 N
 <table>
 <tr>
 <td width="50%" valign="top">
-<img src="media/startup.gif" alt="NyxOS booting to the desktop" width="100%"/>
-<p align="center"><em>Boot → login → windowed desktop (compositor GUI)</em></p>
+<img src="media/startup.gif" alt="NyxOS login and desktop" width="100%"/>
+<p align="center"><em>Login (crescent-moon logo) → windowed desktop → <code>nyxfetch</code></em></p>
 </td>
 <td width="50%" valign="top">
 <img src="media/terminal.gif" alt="NyxOS terminal session" width="100%"/>
-<p align="center"><em>Live shell — <code>nyxfetch</code>, <code>ls</code>, <code>ps</code>, <code>mem</code></em></p>
+<p align="center"><em>Live shell in color — <code>nyxfetch</code>, <code>ls</code> (ANSI colors), <code>ps</code></em></p>
 </td>
 </tr>
 </table>
@@ -170,7 +170,7 @@ nyx:root$ ls /
 bin/   dev/   etc/   home/  mnt/   root/  tmp/   usr/   var/
 
 nyx:root$ uname
-NyxOS 5.8.20 (Scheduler) x86_64
+NyxOS 5.8.28 (GUI Suite) x86_64
 
 nyx:root$ mem
 Physical memory: 256 MB total, 252 MB free

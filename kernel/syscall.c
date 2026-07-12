@@ -509,7 +509,7 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
                 return old_brk;
             }
             uint64_t new_brk = old_brk + (uint64_t)inc;
-            if (new_brk > 0x100000000ULL) return -1;    // keep the heap below 4 GiB
+            if (new_brk > SHARED_LIBC_BASE) return -1;  // keep the heap below the shared libc
             cur->program_break = new_brk;
             return old_brk;
         }

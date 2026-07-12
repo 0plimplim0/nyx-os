@@ -16,6 +16,7 @@
 #include "bootsplash.h"
 #include "auth.h"
 #include "login.h"
+#include "nyx_logo.h"
 
 // Variables globales del kernel
 process_t* process_table[MAX_PROCESSES];
@@ -1754,6 +1755,10 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
     if (initramfs_load() == 0) {
         initramfs_boot();
 
+        // Load the shared libc (/libc.so) before any user process is created, so
+        // elf_load_image can map it into each of them.
+        shared_libc_load();
+
         printf("[INIT] initramfs ready. Use 'exec <file>' to run an ELF binary.\n");
 
         // Try to auto-exec /init.elf from initramfs
@@ -1862,26 +1867,10 @@ void nyxfetch(void) {
     const char* RST_C  = gui ? "\x1b[0m"  : "";
     set_terminal_color(vga_entry_color(VGA_LIGHT_MAGENTA, VGA_BLACK));
 
-    /* The Nyx fox, rendered as an ASCII shade ramp (" .:o#"). Pure ASCII on
-     * purpose: the terminal write path drops bytes >= 0x80, so block glyphs
-     * would vanish. 27 columns wide, 14 rows tall. */
-    static const char* fox[] = {
-        "       .:::o:o#:.          ",
-        "    .:oo.. :o.             ",
-        "  :oo:.oo.o:               ",
-        " .#o:.   :.                ",
-        " #:::....:                 ",
-        "o#::. . o.                 ",
-        "o#.o:   :o                 ",
-        "o###o   o#                 ",
-        ":#oo::  .oo.               ",
-        " o#o:o..  :o:.             ",
-        "  o#ooo::.:::#::        .:.",
-        "  .:o#oo::.: ..:oo::.o:#o. ",
-        "     :o#####:#::o:.::o:    ",
-        "        .::oo####::.       ",
-    };
-    const int FOX_H = 14;
+    /* The NyxOS crescent-moon logo (shared with the login screen — see
+     * kernel/nyx_logo.h), an ASCII shade ramp (" .:o#"), 27 cols x 14 rows. */
+    const char** fox = NYX_LOGO;
+    const int FOX_H = NYX_LOGO_ROWS;
 
     /* ---- Gather system facts (all real; nothing hardcoded) ---- */
     char cpu_brand[49] = "Unknown";

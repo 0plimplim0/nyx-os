@@ -3,6 +3,7 @@
 *.ko
 *.obj
 *.elf
+*.so
 *.bin
 *.iso
 NyxOS.iso
