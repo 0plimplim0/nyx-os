@@ -819,6 +819,22 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             // 0 on timeout, or -EINTR on a signal. The timed-input primitive `top`
             // uses to auto-refresh while staying responsive to 'q'.
             return (uint64_t)(int64_t)stdin_readkey((uint32_t)a1);
+        case SYS_DLOPEN: {
+            // dlopen(path): load the shared object `path` and map it into this
+            // process on demand; returns a handle (>=1), or -1. cwd-relative path.
+            if (!user_str_ok(a1)) return (uint64_t)-1;
+            char path[MAX_PATH];
+            if (copy_path_from_user(path, sizeof(path), a1) != 0) return (uint64_t)-1;
+            return (uint64_t)(int64_t)do_dlopen(path);
+        }
+        case SYS_DLSYM: {
+            // dlsym(handle, name): resolve `name` in the dlopen'd library to its
+            // address, or 0. The caller casts it to a function/data pointer.
+            if (!user_str_ok(a2)) return 0;
+            char name[128];
+            if (copy_str_from_user(name, a2, sizeof(name)) != 0) return 0;
+            return do_dlsym((long)a1, name);
+        }
         default:
             printf("[SYSCALL] Unknown syscall %lu\n", no);
             return -1;

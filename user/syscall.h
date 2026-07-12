@@ -30,6 +30,8 @@
 #define SYS_MPROTECT 26
 #define SYS_GETPROCS 27
 #define SYS_READKEY  28
+#define SYS_DLOPEN   29
+#define SYS_DLSYM    30
 
 #define TTY_CANON   0   /* kernel line discipline: echoed, backspace-edited lines */
 #define TTY_RAW     1   /* byte-at-a-time, no echo, arrows as ESC [ A/B/C/D */
@@ -285,6 +287,18 @@ static inline long getprocs(nyx_procinfo_t* buf, int max) {
  * (e.g. `top`) — redraw when nothing was pressed. No echo, independent of ttymode. */
 static inline long readkey(long timeout_ms) {
     return syscall1(SYS_READKEY, timeout_ms);
+}
+
+/* dlopen(path): load a shared object (a prelinked .so) and map it into this
+ * process on demand. Returns a handle (>=1) to pass to dlsym, or -1 on failure.
+ * dlsym(handle, name): resolve a symbol to its address; cast it to the right
+ * function/data pointer and call/use it. This is NyxOS's runtime dynamic loading
+ * — libraries are at fixed addresses, so there is no relocation. */
+static inline long dlopen(const char* path) {
+    return syscall1(SYS_DLOPEN, (long)path);
+}
+static inline void* dlsym(long handle, const char* name) {
+    return (void*)syscall2(SYS_DLSYM, handle, (long)name);
 }
 
 /* Create a pipe: fds[0] is the read end, fds[1] the write end. Returns 0, or -1.

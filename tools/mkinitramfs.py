@@ -49,7 +49,7 @@ def main():
     usrdir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'user')
     if os.path.isdir(usrdir):
         for f in sorted(os.listdir(usrdir)):
-            if f.endswith('.elf') or f == 'libc.so':   # libc.so = the shared libc (v5.8.28)
+            if f.endswith('.elf') or f.endswith('.so'):   # .so = shared libs (v5.8.28+)
                 fpath = os.path.join(usrdir, f)
                 with open(fpath, 'rb') as fp:
                     elfdata = fp.read()

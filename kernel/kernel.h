@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.28"
+#define KERNEL_VERSION "5.8.29"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -102,6 +102,8 @@ typedef __builtin_va_list va_list;
 #define SYS_MPROTECT 26
 #define SYS_GETPROCS 27
 #define SYS_READKEY  28
+#define SYS_DLOPEN   29
+#define SYS_DLSYM    30
 
 /* SYS_TTYMODE modes. Canonical: read(0) returns a full line, echoed + backspace-
  * edited by the kernel. Raw: read(0) returns bytes as they arrive, NO echo, and
@@ -177,6 +179,8 @@ void shared_libc_load(void);            // parse + load /libc.so into shared fra
 void shared_libc_map(uint64_t* pml4);   // map it into a process's address space
 int  shared_libc_is_ready(void);
 void map_page_ro(uint64_t* pml4, void* phys, void* virt, int exec);  // paging.c: RO user page
+long     do_dlopen(const char* path);              // SYS_DLOPEN: map a .so into this process
+uint64_t do_dlsym(long handle, const char* name);  // SYS_DLSYM: resolve a symbol to its VA
 
 typedef struct {
     uint64_t start;      // page-aligned base VA (inclusive)
