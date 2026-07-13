@@ -163,6 +163,12 @@ static void expand_vars(const char* in, char* out, int outsz) {
             name[ni] = '\0';
             const char* v = env_get(name);
             if (v) for (int k = 0; v[k] && o < outsz - 1; k++) out[o++] = v[k];
+        } else if (in[i] == '~' && (i == 0 || in[i - 1] == ' ') &&
+                   (in[i + 1] == '/' || in[i + 1] == ' ' || in[i + 1] == '\0')) {
+            const char* h = env_get("HOME");            /* ~ / ~/... -> $HOME */
+            if (!h || !*h) h = "/home/user";
+            for (int k = 0; h[k] && o < outsz - 1; k++) out[o++] = h[k];
+            i++;                                         /* consume the ~ */
         } else {
             out[o++] = in[i++];
         }
@@ -302,6 +308,85 @@ static void builtin_bg(char* arg) {
     printf("[bg] %s &\n", j->cmd);
 }
 
+/* ---- filename globbing (* ?) ---------------------------------------------- */
+#define MAX_GLOB 32
+static nyx_dirent_t glob_ents[64];       /* .bss: getdents can't fault lazy pages */
+static char  glob_store[MAX_GLOB][96];
+static char* glob_av[MAX_GLOB + 1];
+
+/* Wildcard match: '*' matches any run (incl. empty), '?' one char, else literal. */
+static int glob_match(const char* pat, const char* s) {
+    while (*pat) {
+        if (*pat == '*') {
+            pat++;
+            if (!*pat) return 1;                         /* trailing * matches the rest */
+            for (; *s; s++) if (glob_match(pat, s)) return 1;
+            return glob_match(pat, s);                   /* also try the empty tail */
+        } else if (*pat == '?') {
+            if (!*s) return 0;
+            pat++; s++;
+        } else {
+            if (*pat != *s) return 0;
+            pat++; s++;
+        }
+    }
+    return *s == '\0';
+}
+
+/* Expand any wildcard args in av[0..*pac) against the filesystem, returning the new
+ * argv (and count via *pac). A plain arg passes through; an arg with '*'/'?' is
+ * replaced by the sorted-ish directory entries it matches — leading-dot names are
+ * skipped unless the pattern itself starts with '.'. A wildcard with no match stays
+ * literal (nullglob off, like bash's default). Runs in the forked child before exec. */
+static char** expand_globs(char** av, int* pac) {
+    int out = 0;
+    for (int a = 0; a < *pac && out < MAX_GLOB; a++) {
+        char* arg = av[a];
+        if (!strchr(arg, '*') && !strchr(arg, '?')) {    /* no wildcard: copy through */
+            strncpy(glob_store[out], arg, sizeof(glob_store[0]) - 1);
+            glob_store[out][sizeof(glob_store[0]) - 1] = '\0';
+            glob_av[out] = glob_store[out]; out++;
+            continue;
+        }
+        /* Split off a directory prefix (everything up to the last '/'). */
+        char dir[80]; int has_dir = 0;
+        const char* pat = arg;
+        char* slash = 0;
+        for (char* q = arg; *q; q++) if (*q == '/') slash = q;
+        if (slash) {
+            int dl = (int)(slash - arg);
+            if (dl == 0) { dir[0] = '/'; dir[1] = '\0'; } /* "/pat" -> dir "/" */
+            else { if (dl > 78) dl = 78; memcpy(dir, arg, dl); dir[dl] = '\0'; }
+            pat = slash + 1;
+            has_dir = 1;
+        }
+        long n = getdents(has_dir ? dir : ".", glob_ents, 64);
+        int matched = 0;
+        for (long e = 0; e < n && out < MAX_GLOB; e++) {
+            const char* nm = glob_ents[e].name;
+            if (nm[0] == '.' && pat[0] != '.') continue; /* skip hidden / . / .. */
+            if (!glob_match(pat, nm)) continue;
+            if (has_dir) {
+                const char* sep = (dir[strlen(dir) - 1] == '/') ? "" : "/";
+                snprintf(glob_store[out], sizeof(glob_store[0]), "%s%s%s", dir, sep, nm);
+            } else {
+                strncpy(glob_store[out], nm, sizeof(glob_store[0]) - 1);
+                glob_store[out][sizeof(glob_store[0]) - 1] = '\0';
+            }
+            glob_av[out] = glob_store[out]; out++;
+            matched = 1;
+        }
+        if (!matched && out < MAX_GLOB) {                /* no match: keep the literal */
+            strncpy(glob_store[out], arg, sizeof(glob_store[0]) - 1);
+            glob_store[out][sizeof(glob_store[0]) - 1] = '\0';
+            glob_av[out] = glob_store[out]; out++;
+        }
+    }
+    glob_av[out] = 0;
+    *pac = out;
+    return glob_av;
+}
+
 /* Run one command line (destroys it). Stages split on '|', each fork+execve'd
  * with pipes wired via dup2. A trailing '&' backgrounds the whole pipeline (the
  * shell parks the pids and returns immediately); otherwise it reaps every stage
@@ -347,6 +432,7 @@ static void run_line(char* line) {
             char *infile, *outfile; int append;
             parse_redir(av, &ac, &infile, &outfile, &append);
             if (ac == 0) exit(0);
+            char** rav = expand_globs(av, &ac);   /* wildcard (* ?) expansion */
             /* File redirections override the pipe wiring for the affected fd. */
             if (infile) {
                 long fd = open(infile, O_RDONLY, 0);
@@ -359,9 +445,9 @@ static void run_line(char* line) {
                 dup2((int)fd, 1); close((int)fd);
             }
             char path[160];
-            resolve(av[0], path);
-            if (!path[0]) { printf("sh: %s: not found\n", av[0]); exit(127); }  /* not on $PATH */
-            execve(path, av, env_build());   /* child inherits the shell environment */
+            resolve(rav[0], path);
+            if (!path[0]) { printf("sh: %s: not found\n", rav[0]); exit(127); }  /* not on $PATH */
+            execve(path, rav, env_build());   /* child inherits the shell environment */
             printf("sh: %s: not found\n", path);
             exit(127);
         } else if (pid < 0) {
@@ -680,7 +766,7 @@ int main(int argc, char** argv) {
      * discipline (echo + backspace handled there), so this is a live shell. */
     signal(SIGINT, on_sigint);           /* Ctrl-C -> fresh prompt instead of dying */
     signal(SIGTSTP, SIG_IGN);            /* Ctrl-Z at the prompt is a no-op (only jobs stop) */
-    printf("NyxOS sh v0.8 — history/edit, Tab, '&' + job control (jobs/fg/bg, Ctrl-Z), 'demo', 'exit'\n");
+    printf("NyxOS sh v0.9 — history/edit, Tab, globs (*?), ~, jobs/fg/bg (Ctrl-Z), '|', '&', 'exit'\n");
     for (;;) {
         reap_jobs();                     /* report finished background jobs */
         char line[128];

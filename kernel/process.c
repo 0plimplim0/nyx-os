@@ -353,9 +353,9 @@ int do_execve(const uint8_t* data, uint32_t size, char* const* kargv, int argc,
     // crt0 reads argc/argv from [rsp] and derives environ = &argv[argc+1].
     user_cr3 = (uint64_t)pd;
     uint64_t sp = (stack_top + 0xFFF) & ~0xFFFULL;      // raw top of the stack page
-    if (argc > 8) argc = 8;
+    if (argc > 32) argc = 32;
     if (envc > 16) envc = 16;
-    uint64_t uargv[9];                                   // user VAs of the argv strings (max 8)
+    uint64_t uargv[33];                                  // user VAs of the argv strings (max 32)
     for (int i = argc - 1; i >= 0; i--) {
         uint64_t len = strlen(kargv[i]) + 1;
         sp -= len;

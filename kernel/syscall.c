@@ -635,16 +635,16 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             // layout, read by crt0). Both are NULL-terminated user arrays of user
             // string pointers — copied into kernel buffers HERE, while the old address
             // space still exists (do_execve destroys it before building the new
-            // stack). Limits: 8 args of 63 chars, 16 env entries of 159 chars. On
+            // stack). Limits: 32 args of 63 chars, 16 env entries of 159 chars. On
             // success the syscall returns into the new program; on failure -1.
             if (!user_str_ok(a1)) return -1;
             char path[128];
             if (copy_str_from_user(path, a1, sizeof(path)) != 0) return -1;
-            static char kargv_store[8][64];    /* safe: syscalls serialized, no block */
-            char* kargv[8];
+            static char kargv_store[32][64];   /* safe: syscalls serialized, no block */
+            char* kargv[32];
             int argc = 0;
             if (a2) {
-                for (; argc < 8; argc++) {
+                for (; argc < 32; argc++) {
                     uint64_t uptr = 0;
                     if (copy_from_user(&uptr, a2 + (uint64_t)argc * 8, 8) != 0) return -1;
                     if (!uptr) break;                    /* NULL terminator */
