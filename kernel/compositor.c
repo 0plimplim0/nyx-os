@@ -9,6 +9,7 @@
 #include "imageview_win.h"
 #include "soundtest_win.h"
 #include "calc_win.h"
+#include "wallpaper_win.h"
 #include "rtc.h"
 
 static window_t* windows[MAX_WINDOWS];
@@ -322,9 +323,10 @@ static void draw_start_menu(void) {
 }
 
 #define CTX_MENU_W 160
-#define CTX_MENU_H 100
+#define CTX_MENU_H 124
+#define CTX_MENU_N 5
 static const char* ctx_menu_items[] = {
-    "New Folder", "New File", "Refresh", "Settings"
+    "New Folder", "New File", "Refresh", "Settings", "Wallpaper"
 };
 
 // Forward declarations
@@ -343,7 +345,7 @@ static void draw_ctx_menu(void) {
     fb_fill_rect(x, y + CTX_MENU_H - 1, CTX_MENU_W, 1, fb_rgb(100,100,100));
     fb_fill_rect(x, y, 1, CTX_MENU_H, fb_rgb(100,100,100));
     fb_fill_rect(x + CTX_MENU_W - 1, y, 1, CTX_MENU_H, fb_rgb(100,100,100));
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < CTX_MENU_N; i++) {
         int iy = y + 4 + i * 24;
         fb_fill_rect(x + 4, iy, CTX_MENU_W - 8, 22, fb_rgb(45,45,50));
         font_draw_string(x + 12, iy + 3, ctx_menu_items[i], fb_rgb(220,220,220), fb_rgb(45,45,50));
@@ -367,7 +369,7 @@ static int ctx_menu_item_hit(int mx, int my, int* idx) {
     if (y + CTX_MENU_H > (int)fh - TASKBAR_H) y = (int)fh - TASKBAR_H - CTX_MENU_H - 2;
     if (mx < x || mx >= x + CTX_MENU_W || my < y || my >= y + CTX_MENU_H) return 0;
     *idx = (my - y - 4) / 24;
-    if (*idx < 0 || *idx >= 4) return 0;
+    if (*idx < 0 || *idx >= CTX_MENU_N) return 0;
     return 1;
 }
 
@@ -428,6 +430,12 @@ static void do_ctx_menu_action(int idx) {
         case 3: // Settings
             do_start_menu_action(4);
             break;
+        case 4: // Wallpaper
+            {
+                window_t* wwin = window_create(180, 110, 360, 340, "Wallpaper", wallpaper_win_draw);
+                if (wwin) wwin->on_click = wallpaper_win_click;
+            }
+            break;
     }
     redraw_all();
 }
@@ -441,38 +449,24 @@ static void draw_workspace_indicator(void) {
     }
 }
 
+// The desktop background: a smooth vertical gradient built from the wallpaper base
+// color the user picked (default = the brand purple). Each band scales the base's
+// brightness from ~45% at the top to ~115% at the bottom (clamped), which reads as a
+// soft top-to-bottom glow in whatever hue is selected. The Wallpaper app changes the
+// base color (wallpaper_base_color) and the compositor repaints this on the next frame.
 static void draw_background(void) {
     uint32_t fw = fb_get_width(), fh = fb_get_height();
-    uint32_t steps = 64;
-    uint32_t band_h = fh / steps;
+    uint32_t base = wallpaper_base_color();
+    int br = (int)((base >> 16) & 0xFF), bg = (int)((base >> 8) & 0xFF), bb = (int)(base & 0xFF);
+
+    uint32_t steps = 96;
+    uint32_t band_h = fh / steps + 1;
     for (uint32_t i = 0; i < steps; i++) {
-        uint32_t t = i * 255 / steps;
-        uint8_t r = 50 + t * 90 / 255;
-        uint8_t g = 100 + t * 80 / 255;
-        uint8_t b = 180 + t * 40 / 255;
-        if (r > 160) r = 160;
-        if (g > 200) g = 200;
-        if (b > 240) b = 240;
-        fb_fill_rect(0, i * band_h, fw, band_h + 1, fb_rgb(r, g, b));
-    }
-    uint32_t glow_h = fh / 6;
-    uint32_t glow_start = fh - glow_h;
-    for (uint32_t i = 0; i < glow_h; i++) {
-        uint32_t a = i * 255 / glow_h;
-        uint8_t r = 50 + a * 100 / 255;
-        uint8_t g = 100 + a * 100 / 255;
-        uint8_t b = 200 + a * 40 / 255;
-        if (r > 200) r = 200;
-        if (g > 220) g = 220;
-        /* b (uint8_t) cannot exceed 255, so no clamp needed */
-        fb_fill_rect(0, glow_start + i, fw, 1, fb_rgb(r, g, b));
-    }
-    // Ground/grass strip at very bottom
-    uint32_t grass_h = fh / 12;
-    for (uint32_t i = 0; i < grass_h; i++) {
-        uint8_t g = 100 + i * 60 / grass_h;
-        if (g > 180) g = 180;
-        fb_fill_rect(0, fh - grass_h + i, fw, 1, fb_rgb(30, g, 40));
+        int pct = 45 + (int)(i * 70 / steps);      // 45% (top) .. 115% (bottom)
+        int r = br * pct / 100; if (r > 255) r = 255;
+        int g = bg * pct / 100; if (g > 255) g = 255;
+        int b = bb * pct / 100; if (b > 255) b = 255;
+        fb_fill_rect(0, i * band_h, fw, band_h, fb_rgb((uint8_t)r, (uint8_t)g, (uint8_t)b));
     }
 }
 
