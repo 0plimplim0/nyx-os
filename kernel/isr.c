@@ -43,7 +43,8 @@ void isr_handler(uint64_t int_no, uint64_t rip, uint64_t error, uint64_t cs) {
             uint64_t cr2 = read_cr2();
             printf("[PANIC] Page fault at 0x%lx\n", cr2);
         }
-        kernel_panic("Unhandled exception");
+        kernel_panic("%s (#%lu) at RIP 0x%lx (ring %lu, err 0x%lx)",
+                     exception_names[int_no], int_no, rip, cs & 3, error);
     }
 }
 

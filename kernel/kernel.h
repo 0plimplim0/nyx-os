@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.40"
+#define KERNEL_VERSION "5.8.41"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -934,6 +934,7 @@ extern int keyboard_layout;
 void set_keyboard_layout(int layout);
 
 int snprintf(char *buf, size_t size, const char *fmt, ...);
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
 char* strcasestr(const char *haystack, const char *needle);
 
 int vbe_init(void);
@@ -950,6 +951,7 @@ void fb_blit(const void* src, uint32_t sx, uint32_t sy, uint32_t w, uint32_t h, 
 void fb_clear(uint32_t color);
 int  fb_enable_backbuffer(void);   // opt-in double buffering (compositor)
 void fb_present(void);             // blit the back buffer to the LFB (one frame)
+void fb_use_lfb_direct(void);      // repoint drawing at the hardware LFB (panic screen)
 uint32_t fb_get_width(void);
 uint32_t fb_get_height(void);
 void* fb_get_addr(void);
@@ -965,6 +967,8 @@ void mouse_set_pos(int x, int y);
 
 void font_draw_char(uint32_t x, uint32_t y, unsigned char c, uint32_t fg, uint32_t bg);
 void font_draw_string(uint32_t x, uint32_t y, const char* str, uint32_t fg, uint32_t bg);
+void font_draw_char_scaled(uint32_t x, uint32_t y, unsigned char c, uint32_t fg, uint32_t bg, uint32_t scale);
+void font_draw_string_scaled(uint32_t x, uint32_t y, const char* str, uint32_t fg, uint32_t bg, uint32_t scale);
 uint32_t font_get_width(void);
 uint32_t font_get_height(void);
 

@@ -1580,19 +1580,95 @@ static void cmd_kill(int argc, char** argv) {
 // ============================================================
 // kernel_panic
 // ============================================================
+// Full-screen graphical panic (a NyxOS "sad-face" stop screen). Best-effort: it
+// only draws when a framebuffer is up, and it renders straight to the hardware
+// LFB (fb_use_lfb_direct) because by panic time the compositor's double-buffer
+// present loop is dead — anything drawn to the back buffer would never appear.
+static void panic_screen(const char* msg, uint64_t cr0, uint64_t cr2,
+                         uint64_t cr3, uint64_t caller) {
+    if (!fb_get_addr() || fb_get_width() == 0) return;   // no framebuffer: text only
+    fb_use_lfb_direct();
+    uint32_t w = fb_get_width(), h = fb_get_height();
+    uint32_t bg  = fb_rgb(58, 26, 92);      // deep NyxOS purple (brand)
+    uint32_t fg  = fb_rgb(245, 240, 252);
+    uint32_t dim = fb_rgb(198, 178, 232);
+
+    fb_fill_rect(0, 0, w, h, bg);
+
+    int margin = 80;
+    int y = 76;
+
+    font_draw_string_scaled(margin, y, ":(", fg, bg, 7);     // big sad face
+    y += 7 * (int)font_get_height() + 28;
+
+    font_draw_string_scaled(margin, y, "KERNEL PANIC", fg, bg, 3);
+    y += 3 * (int)font_get_height() + 16;
+
+    font_draw_string(margin, y, "NyxOS ran into a problem and had to stop.", dim, bg);
+    y += (int)font_get_height() + 22;
+
+    font_draw_string(margin, y, "Reason:", dim, bg);
+    y += (int)font_get_height() + 6;
+
+    // The panic message, wrapped to the screen width at 2x scale.
+    int mscale = 2;
+    int maxc = (int)(w - 2 * margin) / (int)(font_get_width() * mscale);
+    if (maxc < 1) maxc = 1;
+    int len = 0; while (msg && msg[len]) len++;
+    if (len == 0) {
+        font_draw_string_scaled(margin, y, "(unknown)", fg, bg, mscale);
+        y += (int)font_get_height() * mscale + 6;
+    }
+    for (int i = 0; i < len; ) {
+        char line[160];
+        int n = 0;
+        while (n < maxc && n < 159 && msg[i + n]) { line[n] = msg[i + n]; n++; }
+        line[n] = '\0';
+        font_draw_string_scaled(margin, y, line, fg, bg, mscale);
+        y += (int)font_get_height() * mscale + 6;
+        i += n;
+    }
+
+    // Register / fault context.
+    y += 18;
+    char rb[96];
+    snprintf(rb, sizeof(rb), "CR0=0x%lx   CR2=0x%lx", cr0, cr2);
+    font_draw_string(margin, y, rb, dim, bg); y += (int)font_get_height() + 4;
+    snprintf(rb, sizeof(rb), "CR3=0x%lx   from=0x%lx", cr3, caller);
+    font_draw_string(margin, y, rb, dim, bg);
+
+    // Footer + brand mark.
+    font_draw_string(margin, (int)h - 58,
+                     "The system has been halted to prevent damage.", dim, bg);
+    font_draw_string(margin, (int)h - 38,
+                     "Please restart your device (power cycle or Ctrl+Alt+Del).", dim, bg);
+    font_draw_string_scaled((int)w - 6 * (int)font_get_width() - 24, 30, "NyxOS", dim, bg, 1);
+}
+
 void kernel_panic(const char* msg, ...) {
+    __asm__ volatile("cli");            // stop the scheduler and other IRQs
+    uint64_t caller = (uint64_t)__builtin_return_address(0);
+
+    // Format the message once, into static storage (the stack may be exhausted).
+    static char pbuf[256];
     va_list args;
     va_start(args, msg);
-    printf("\n\n[KERNEL PANIC] ");
-    vprintf(msg, args);
-    printf("\n\nSystem halted.\n");
+    vsnprintf(pbuf, sizeof(pbuf), msg, args);
     va_end(args);
+
     uint64_t cr0, cr2, cr3;
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-    printf("CR0=0x%lx CR2=0x%lx CR3=0x%lx\n", cr0, cr2, cr3);
-    while(1) { __asm__ volatile("hlt"); }
+
+    // Text/serial log first (kept for debugging; greppable "[KERNEL PANIC]").
+    printf("\n\n[KERNEL PANIC] %s\n\nSystem halted.\n", pbuf);
+    printf("CR0=0x%lx CR2=0x%lx CR3=0x%lx from=0x%lx\n", cr0, cr2, cr3, caller);
+
+    // Then the visual stop screen (overwrites the framebuffer if one is up).
+    panic_screen(pbuf, cr0, cr2, cr3, caller);
+
+    while (1) { __asm__ volatile("hlt"); }
 }
 
 // ============================================================
@@ -2223,9 +2299,7 @@ void load_wifi_firmware(void) {}
 // ============================================================
 // IMPLEMENTACIONES DE snprintf Y strcasestr
 // ============================================================
-int snprintf(char *buf, size_t size, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
     int written = 0;
     char *p = buf;
     while (*fmt && written < (int)size - 1) {
@@ -2310,6 +2384,13 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
         }
     }
     *p = '\0';
+    return written;
+}
+
+int snprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int written = vsnprintf(buf, size, fmt, args);
     va_end(args);
     return written;
 }

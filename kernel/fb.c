@@ -55,6 +55,14 @@ void fb_present(void) {
     memcpy_asm(fb_hw, fb_back, (size_t)fb_width * fb_height * 4);
 }
 
+// Repoint all drawing straight at the hardware framebuffer. The panic screen
+// uses this: the compositor's present loop is dead by the time we panic, so
+// anything drawn to the back buffer would never be published — draw direct so
+// it's on the visible screen immediately (no fb_present needed).
+void fb_use_lfb_direct(void) {
+    if (fb_hw) fb_addr = fb_hw;
+}
+
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (!fb_addr || x >= fb_width || y >= fb_height) return;
     if (fb_bpp == 32) {

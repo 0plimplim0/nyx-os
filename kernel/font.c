@@ -284,5 +284,31 @@ void font_draw_string(uint32_t x, uint32_t y, const char* str, uint32_t fg, uint
     }
 }
 
+// Scaled glyph draw: each font pixel becomes a scale x scale block. Used by the
+// panic screen for the big ":(" face and headings (the font is a fixed 8x16, so
+// this is the only way to get larger text). Draws every cell pixel (fg or bg).
+void font_draw_char_scaled(uint32_t x, uint32_t y, unsigned char c,
+                           uint32_t fg, uint32_t bg, uint32_t scale) {
+    if (scale == 0) scale = 1;
+    const uint8_t* glyph = font_data[c];
+    for (uint32_t row = 0; row < FONT_HEIGHT; row++) {
+        uint32_t row_bits = glyph[row];
+        for (uint32_t col = 0; col < FONT_WIDTH; col++) {
+            uint32_t color = ((row_bits >> (7 - col)) & 1) ? fg : bg;
+            fb_fill_rect(x + col * scale, y + row * scale, scale, scale, color);
+        }
+    }
+}
+
+void font_draw_string_scaled(uint32_t x, uint32_t y, const char* str,
+                             uint32_t fg, uint32_t bg, uint32_t scale) {
+    if (scale == 0) scale = 1;
+    while (*str) {
+        font_draw_char_scaled(x, y, (unsigned char)*str, fg, bg, scale);
+        x += FONT_WIDTH * scale;
+        str++;
+    }
+}
+
 uint32_t font_get_width(void) { return FONT_WIDTH; }
 uint32_t font_get_height(void) { return FONT_HEIGHT; }
