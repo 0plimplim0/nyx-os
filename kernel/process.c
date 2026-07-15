@@ -6,6 +6,30 @@ static uint64_t next_pid = 1;
 
 int current_idx = 0;
 
+// Per-process kernel stack. This one region is the TSS RSP0 (ring3->ring0 faults/
+// IRQs) AND the `syscall` stack, so the ENTIRE syscall runs on it — including
+// do_execve's deep chain (elf_load_image + memcpy of the ELF + free_page_directory's
+// 4-level walk + the argv/envp frame arrays) with a timer IRQ able to nest on top
+// while a syscall is blocked. A 4 KB stack was too tight: an overflow writes below
+// the allocation into the adjacent kmalloc chunk, corrupting whatever lives there
+// (a page table, another process_t, ...) — the wild-write "pipeline Heisenbug". Give
+// each process a roomier stack and a canary at the low boundary so an overflow is
+// caught loudly (kstack_check) instead of silently corrupting the heap.
+#define KSTACK_SIZE   16384
+#define KSTACK_CANARY 0xC0DEC0DEC0DEC0DEULL
+
+// Verify a process's kernel-stack canary (the qword at the low end of its stack
+// region). If the stack overflowed past the bottom it will have been clobbered.
+static void kstack_check(process_t* p) {
+    if (!p || !p->kernel_stack) return;
+    uint64_t* base = (uint64_t*)((uintptr_t)p->kernel_stack - KSTACK_SIZE);
+    if (*base != KSTACK_CANARY) {
+        printf("\n[KSTACK] overflow: pid=%u comm=%s canary=0x%lx (expected 0x%lx)\n",
+               (unsigned)p->pid, p->comm, *base, (uint64_t)KSTACK_CANARY);
+        kernel_panic("kernel stack overflow in pid %u (%s)", (unsigned)p->pid, p->comm);
+    }
+}
+
 void init_process(void) {
     memset_asm(process_table, 0, sizeof(process_table));
     process_t* init = (process_t*)kmalloc(sizeof(process_t));
@@ -29,9 +53,10 @@ void init_process(void) {
 //   rbp, rdi, rsi, rdx, rcx, rbx, rax,
 //   int_no(32), error(0), rip, cs, rflags, rsp, ss
 static int init_task_stack(process_t* proc, void* entry_point) {
-    void* stack_mem = kmalloc(4096);
+    void* stack_mem = kmalloc(KSTACK_SIZE);
     if (!stack_mem) return -1;
-    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + 4096);
+    *(uint64_t*)stack_mem = KSTACK_CANARY;                 // overflow sentinel (low end)
+    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + KSTACK_SIZE);
 
     // iretq frame for kernel process (ring 0). In long mode iretq ALWAYS pops
     // SS:RSP, even without a privilege change, so SS must be the kernel *data*
@@ -40,7 +65,7 @@ static int init_task_stack(process_t* proc, void* entry_point) {
     // That bug stayed latent until preemptive scheduling actually iretq'd into one
     // of these frames.
     *--sp = KERNEL_DS;         // ss = kernel data (0x10)
-    *--sp = (uint64_t)(uintptr_t)stack_mem + 4096; // rsp
+    *--sp = (uint64_t)(uintptr_t)stack_mem + KSTACK_SIZE; // rsp
     *--sp = 0x202;             // rflags (IF set)
     *--sp = KERNEL_CS;         // cs = kernel code (0x08)
     *--sp = (uint64_t)(uintptr_t)entry_point; // rip
@@ -53,14 +78,15 @@ static int init_task_stack(process_t* proc, void* entry_point) {
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
 
     proc->stack = (void*)((uintptr_t)sp);
-    proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
+    proc->kernel_stack = (void*)((uintptr_t)stack_mem + KSTACK_SIZE);
     return 0;
 }
 
 static int init_user_task_stack(process_t* proc, void* entry_point, void* user_stack_top) {
-    void* stack_mem = kmalloc(4096);
+    void* stack_mem = kmalloc(KSTACK_SIZE);
     if (!stack_mem) return -1;
-    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + 4096);
+    *(uint64_t*)stack_mem = KSTACK_CANARY;                 // overflow sentinel (low end)
+    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + KSTACK_SIZE);
 
     // iretq frame for user process (ring 3)
     // When iretq detects CS.DPL != current CPL, it pops SS:RSP too (5 values)
@@ -84,7 +110,7 @@ static int init_user_task_stack(process_t* proc, void* entry_point, void* user_s
     // keeps user procs consistent with the value the scheduler later saves (the
     // TSS RSP0 is also a higher-half alias). Kernel threads stay low (init_task_stack).
     proc->stack = (void*)((uintptr_t)sp + KERNEL_BASE);
-    proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
+    proc->kernel_stack = (void*)((uintptr_t)stack_mem + KSTACK_SIZE);
     return 0;
 }
 
@@ -152,9 +178,10 @@ process_t* create_user_process(const char* name, void* entry, void* user_stack, 
 // The layout mirrors init_user_task_stack (SAVE_REGS block below an iretq frame),
 // so the scheduler resumes it through the same irq_common RESTORE_REGS/iretq path.
 static int init_forked_task_stack(process_t* proc, uint64_t* frame, uint64_t user_rsp) {
-    void* stack_mem = kmalloc(4096);
+    void* stack_mem = kmalloc(KSTACK_SIZE);
     if (!stack_mem) return -1;
-    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + 4096);
+    *(uint64_t*)stack_mem = KSTACK_CANARY;                 // overflow sentinel (low end)
+    uint64_t* sp = (uint64_t*)((uintptr_t)stack_mem + KSTACK_SIZE);
 
     // iretq frame back to ring 3 (identical shape to init_user_task_stack).
     *--sp = USER_DS;                 // ss
@@ -186,7 +213,7 @@ static int init_forked_task_stack(process_t* proc, uint64_t* frame, uint64_t use
 
     // Saved kernel RSP as a higher-half alias (see init_user_task_stack's note).
     proc->stack = (void*)((uintptr_t)sp + KERNEL_BASE);
-    proc->kernel_stack = (void*)((uintptr_t)stack_mem + 4096);
+    proc->kernel_stack = (void*)((uintptr_t)stack_mem + KSTACK_SIZE);
     return 0;
 }
 
@@ -444,7 +471,7 @@ void reap_user_process(process_t* proc) {
     }
     mmap_free_bufs(proc);
     if (proc->page_directory) free_page_directory((uint64_t*)proc->page_directory);
-    if (proc->kernel_stack) kfree((void*)((uintptr_t)proc->kernel_stack - 4096));
+    if (proc->kernel_stack) kfree((void*)((uintptr_t)proc->kernel_stack - KSTACK_SIZE));
     kfree(proc);
 }
 
@@ -559,6 +586,7 @@ void irq_scheduler_tick(void) {
     // ring-3 process keeps its own CR3 if it's the only thing runnable).
     process_t* cur = (current_idx >= 0 && current_idx < process_count)
                          ? process_table[current_idx] : NULL;
+    kstack_check(cur);        // catch a kernel-stack overflow before it spreads further
     next_rsp = saved_rsp;
     next_cr3 = (cur && cur->page_directory && !cur->blocked_in_kernel)
                    ? (uint64_t)cur->page_directory
@@ -628,7 +656,7 @@ void reap_zombies(void) {
         close_proc_fds(p);                              // close any fds it left open
         mmap_free_bufs(p);
         if (p->page_directory) free_page_directory((uint64_t*)p->page_directory);
-        if (p->kernel_stack) kfree((void*)((uintptr_t)p->kernel_stack - 4096));
+        if (p->kernel_stack) kfree((void*)((uintptr_t)p->kernel_stack - KSTACK_SIZE));
         // Swap-remove, keeping current_idx pointing at the same live proc if the
         // one we moved happened to be the current thread.
         int last = --process_count;
@@ -692,7 +720,7 @@ int do_waitpid(int wpid, int* out_code, int options) {
             close_proc_fds(child);
             mmap_free_bufs(child);
             if (child->page_directory) free_page_directory((uint64_t*)child->page_directory);
-            if (child->kernel_stack) kfree((void*)((uintptr_t)child->kernel_stack - 4096));
+            if (child->kernel_stack) kfree((void*)((uintptr_t)child->kernel_stack - KSTACK_SIZE));
             int last = --process_count;                   // swap-remove, keeping current_idx valid
             process_table[zi] = process_table[last];
             process_table[last] = NULL;
