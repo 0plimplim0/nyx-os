@@ -12,7 +12,9 @@ extern net_iface_t net_interfaces[8];
 typedef struct {
     int in_use;
     int type;
-    int tcp_conn;    // tcp.c connection id, or -1 before connect()
+    int tcp_conn;        // connected/accepted conn id, the LISTEN conn id, or -1
+    uint16_t local_port; // set by bind()
+    int listening;       // 1 once listen() put it into passive-open
 } nsock_t;
 
 static nsock_t nsocks[MAX_SOCKETS];
@@ -46,6 +48,11 @@ void kernel_poll_net(void) {
     extern void eth_poll(int iface_idx);
     extern void ip_loopback_poll(void);
     extern void tcp_tick(void);
+    // NOTE: not re-entrancy-guarded. Two processes busy-polling the net at once
+    // (a forked server accept()ing while its client connect()s) is unsupported —
+    // it hits the latent IRQ-load register/CR3 Heisenbug (see AGENTS.md), and a
+    // cli/sti guard here only made that fire deterministically. Socket programs
+    // therefore stay single-process (one blocking call polls at a time).
     ip_loopback_poll();   // deliver any self-addressed (loopback) packets
     for (int i = 0; i < 8; i++) {
         if (net_interfaces[i].name[0] && strcmp(net_interfaces[i].name, "lo") != 0) {
@@ -98,6 +105,49 @@ int nsock_connect(int s, uint32_t ip, uint16_t port) {
         for (volatile int d = 0; d < 1500; d++) inb(0x80);
     }
     return -1;
+}
+
+int nsock_bind(int s, uint32_t ip, uint16_t port) {
+    (void)ip;                                     // single-homed: bind records the port
+    if (!nsock_valid(s)) return -1;
+    nsocks[s].local_port = port;
+    return 0;
+}
+
+int nsock_listen(int s, int backlog) {
+    (void)backlog;
+    if (!nsock_valid(s) || nsocks[s].local_port == 0) return -1;
+    int l = tcp_listen(nsocks[s].local_port);     // passive open in tcp.c
+    if (l < 0) return -1;
+    nsocks[s].tcp_conn = l;
+    nsocks[s].listening = 1;
+    return 0;
+}
+
+int nsock_accept(int s) {
+    if (!nsock_valid(s) || !nsocks[s].listening || nsocks[s].tcp_conn < 0) return -1;
+    int lc = nsocks[s].tcp_conn;
+    // Block (busy-poll) until a client's handshake completes on our listen port,
+    // then hand it out as a fresh socket. tcp_accept returns an ESTABLISHED child.
+    for (int i = 0; i < 6000; i++) {
+        int child = tcp_accept(lc);
+        if (child >= 0) {
+            for (int j = 0; j < MAX_SOCKETS; j++) {
+                if (!nsocks[j].in_use) {
+                    nsocks[j].in_use = 1;
+                    nsocks[j].type = SOCK_STREAM;
+                    nsocks[j].tcp_conn = child;
+                    nsocks[j].local_port = nsocks[s].local_port;
+                    nsocks[j].listening = 0;
+                    return j;                     // caller wraps this in a new fd
+                }
+            }
+            return -1;                            // socket table full
+        }
+        kernel_poll_net();
+        for (volatile int d = 0; d < 1500; d++) inb(0x80);
+    }
+    return -1;                                    // timed out with no client
 }
 
 int nsock_send(int s, const void* buf, int len) {

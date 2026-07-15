@@ -37,6 +37,9 @@
 #define SYS_SETFG    33
 #define SYS_SOCKET   34
 #define SYS_CONNECT  35
+#define SYS_BIND     36
+#define SYS_LISTEN   37
+#define SYS_ACCEPT   38
 
 #define TTY_CANON   0   /* kernel line discipline: echoed, backspace-edited lines */
 #define TTY_RAW     1   /* byte-at-a-time, no echo, arrows as ESC [ A/B/C/D */
@@ -403,6 +406,20 @@ static inline long send(int fd, const void* buf, long len, int flags) {
 }
 static inline long recv(int fd, void* buf, long len, int flags) {
     (void)flags; return read(fd, buf, len);
+}
+
+/* Server side. bind(fd, INADDR_ANY, port) records the local port; listen() opens
+ * it passively; accept() blocks until a client connects and returns a NEW fd for
+ * that connection (the listener fd stays open for further clients). */
+#define INADDR_ANY 0U
+static inline long bind(int fd, unsigned int ip, int port) {
+    return syscall3(SYS_BIND, fd, (long)ip, port);
+}
+static inline long listen(int fd, int backlog) {
+    return syscall2(SYS_LISTEN, fd, backlog);
+}
+static inline long accept(int fd) {
+    return syscall1(SYS_ACCEPT, fd);
 }
 
 #endif

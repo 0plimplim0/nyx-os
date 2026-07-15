@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.52"
+#define KERNEL_VERSION "5.8.53"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -109,6 +109,9 @@ typedef __builtin_va_list va_list;
 #define SYS_SETFG    33
 #define SYS_SOCKET   34
 #define SYS_CONNECT  35
+#define SYS_BIND     36
+#define SYS_LISTEN   37
+#define SYS_ACCEPT   38
 
 /* SYS_TTYMODE modes. Canonical: read(0) returns a full line, echoed + backspace-
  * edited by the kernel. Raw: read(0) returns bytes as they arrive, NO echo, and
@@ -928,6 +931,9 @@ int udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port, const uint8_
 // socket branches of SYS_READ/WRITE/CLOSE. Returns a small net-socket id.
 int nsock_create(int domain, int type, int protocol);
 int nsock_connect(int s, uint32_t ip, uint16_t port);   // blocks until ESTABLISHED
+int nsock_bind(int s, uint32_t ip, uint16_t port);      // record the local port
+int nsock_listen(int s, int backlog);                   // passive open on the bound port
+int nsock_accept(int s);                                // blocks; new socket id for the peer
 int nsock_send(int s, const void* buf, int len);
 int nsock_recv(int s, void* buf, int len);              // blocks until data or EOF
 int nsock_close(int s);

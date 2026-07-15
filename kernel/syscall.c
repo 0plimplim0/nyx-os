@@ -584,6 +584,31 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             if (!(internal & UFD_SOCK_FLAG)) return -1;
             return nsock_connect(UFD_SOCK_ID(internal), (uint32_t)a2, (uint16_t)a3);
         }
+        case SYS_BIND: {
+            int internal;
+            if (ufd_lookup((int)a1, &internal) != 0) return -1;
+            if (!(internal & UFD_SOCK_FLAG)) return -1;
+            return nsock_bind(UFD_SOCK_ID(internal), (uint32_t)a2, (uint16_t)a3);
+        }
+        case SYS_LISTEN: {
+            int internal;
+            if (ufd_lookup((int)a1, &internal) != 0) return -1;
+            if (!(internal & UFD_SOCK_FLAG)) return -1;
+            return nsock_listen(UFD_SOCK_ID(internal), (int)a2);
+        }
+        case SYS_ACCEPT: {
+            /* accept(fd): block until a client connects, returning a NEW fd for
+             * that connection (usable with read/write/close); the listener fd
+             * stays open for further clients. */
+            int internal;
+            if (ufd_lookup((int)a1, &internal) != 0) return -1;
+            if (!(internal & UFD_SOCK_FLAG)) return -1;
+            int cs = nsock_accept(UFD_SOCK_ID(internal));
+            if (cs < 0) return -1;
+            int ufd = ufd_alloc(UFD_SOCK_MAKE(cs));
+            if (ufd < 0) { nsock_close(cs); return -1; }    /* fd table full */
+            return ufd;
+        }
         case SYS_GETPID: {
             process_t* cur = get_cur_proc();
             return cur ? cur->pid : 0;
