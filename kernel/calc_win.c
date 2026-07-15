@@ -19,7 +19,7 @@ static const uint8_t pos_to_btn[16] = {
 };
 
 static void update_display(calc_win_t* calc) {
-    snprintf(calc->display, sizeof(calc->display), "%ld", (long)calc->current_val);
+    snprintf(calc->display, sizeof(calc->display), "%ld", (long long)calc->current_val);
 }
 
 calc_win_t* calc_create_ctx(void) {
