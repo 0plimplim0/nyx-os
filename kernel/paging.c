@@ -47,6 +47,23 @@ void* get_phys_addr(void* virtual_addr) {
     return (void*)((pte & ~0xFFF) + offset);
 }
 
+// Extract the physical base of a present intermediate page-table entry with the FULL
+// address mask (bits 51:12) — NOT `& ~0xFFF`, which leaves the NX bit (63) and any
+// reserved high bits in place, so a corrupted entry becomes a non-canonical pointer
+// that #GPs opaquely on the next dereference. A well-formed intermediate entry never
+// has bits 63:52 set; if any are, the table is corrupt (the still-open "-1 writer")
+// — panic here with the offending value/vaddr/pid instead of crashing one deref later.
+#define PT_ADDR_BITS 0x000FFFFFFFFFF000ULL
+static uint64_t* pt_next(uint64_t entry, const char* level, uint64_t vaddr, int idx) {
+    if (entry & 0xFFF0000000000000ULL) {
+        process_t* p = get_current_process();
+        printf("\n[MAPCORRUPT] %s=0x%lx (reserved bits set) vaddr=0x%lx idx=%d pid=%u comm=%s\n",
+               level, entry, vaddr, idx, p ? (unsigned)p->pid : 0, p ? p->comm : "?");
+        kernel_panic("page-table corruption: %s=0x%lx (vaddr 0x%lx)", level, entry, vaddr);
+    }
+    return (uint64_t*)(entry & PT_ADDR_BITS);
+}
+
 // Map a page in a specific PML4
 static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
     uint64_t vaddr = (uint64_t)virt;
@@ -63,7 +80,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pdpt, 0, 4096);
         pml4[pml4_idx] = (uint64_t)pdpt | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pdpt = (uint64_t*)(pml4e & ~0xFFF);
+        pdpt = pt_next(pml4e, "pml4e", vaddr, pml4_idx);
     }
 
     uint64_t pdpte = pdpt[pdpt_idx];
@@ -74,7 +91,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pd, 0, 4096);
         pdpt[pdpt_idx] = (uint64_t)pd | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pd = (uint64_t*)(pdpte & ~0xFFF);
+        pd = pt_next(pdpte, "pdpte", vaddr, pdpt_idx);
     }
 
     uint64_t pde = pd[pd_idx];
@@ -85,7 +102,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pt, 0, 4096);
         pd[pd_idx] = (uint64_t)pt | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pt = (uint64_t*)(pde & ~0xFFF);
+        pt = pt_next(pde, "pde", vaddr, pd_idx);
     }
 
     pt[pt_idx] = (uint64_t)phys | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0) | (flags & PAGE_NX);

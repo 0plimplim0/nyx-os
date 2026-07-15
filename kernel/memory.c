@@ -20,6 +20,19 @@ static uint32_t free_pages = 0;
 // simply means "unconditional free", so legacy callers keep working.
 static uint8_t page_refcount[MAX_PAGES];
 
+// Frames that must NEVER return to the allocator, whatever the refcount says: the
+// shared-libc master pages (loaded once at boot, mapped read-only into every
+// process). A per-process libc mapping that wasn't matched by an incref would
+// otherwise drive the master reference to 0 in free_page and release the frame;
+// alloc_page() then hands the still-mapped page back out (double-allocation) — the
+// root of the pipeline memory corruption. Pinning the masters breaks that at the
+// source. page_pin() is called from shared_libc.c as each master frame is loaded.
+static uint8_t page_pinned[MAX_PAGES];
+void page_pin(void* addr) {
+    uint32_t page_idx = (uint32_t)(uintptr_t)addr / PAGE_SIZE;
+    if (page_idx < MAX_PAGES) page_pinned[page_idx] = 1;
+}
+
 void init_memory(uint64_t mem_size) {
     memory_total = mem_size;
     memory_used = 0;
@@ -82,6 +95,9 @@ void free_page(void* addr) {
     if (page_idx >= total_pages) return;
     // Shared page (COW): drop one reference, keep the frame for the others.
     if (page_refcount[page_idx] > 1) { page_refcount[page_idx]--; return; }
+    // Pinned (shared-libc master) frames live for the whole OS lifetime: never free
+    // one, and floor its refcount at 1 so a stray over-decrement can't underflow it.
+    if (page_pinned[page_idx]) { page_refcount[page_idx] = 1; return; }
     page_refcount[page_idx] = 0;
     page_bitmap[page_idx / 32] |= 1 << (page_idx % 32);
     free_pages++;

@@ -61,6 +61,16 @@ void* slab_alloc(uint32_t size) {
     for (slab_page_t* page = cache->pages; page; page = page->next) {
         if (page->free_list) {
             slab_slot_t* slot = page->free_list;
+            // A free-list next pointer must be NULL or another slot in THIS page. A
+            // wild write (the open "-1 writer" under extreme fork/execve churn) smashes
+            // it to 0xFFFF..FFFF, which the old code dereferenced blindly -> opaque #PF
+            // in slab_alloc. Catch it here with the corrupt slot/value instead.
+            uint64_t pb = (uint64_t)page, nx = (uint64_t)slot->next;
+            if (nx != 0 && (nx < pb + sizeof(slab_page_t) || nx >= pb + SLAB_PAGE_SIZE)) {
+                printf("\n[SLABCORRUPT] obj_size=%u page=%p slot=%p next=0x%lx (outside page)\n",
+                       cache->obj_size, (void*)page, (void*)slot, nx);
+                kernel_panic("slab free-list corruption: slot %p next=0x%lx", (void*)slot, nx);
+            }
             page->free_list = slot->next;
             page->free_objs--;
             return (void*)slot;

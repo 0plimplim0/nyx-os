@@ -49,6 +49,7 @@ static int libseg_load(const uint8_t* data, uint32_t size, libseg_t* segs, int* 
         for (uint32_t p = 0; p < np; p++) {
             void* frame = alloc_page();
             if (!frame) return -1;
+            page_pin(frame);          // master frame: must never return to the allocator
             memset_asm(frame, 0, 4096);
             uint64_t page = start + (uint64_t)p * 4096;
             uint64_t cs = (page > vaddr) ? page : vaddr;

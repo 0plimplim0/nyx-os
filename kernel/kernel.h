@@ -709,6 +709,7 @@ void* alloc_page(void);
 void free_page(void* addr);
 void page_incref(void* addr);           // COW: share an allocated page (fork)
 uint32_t page_get_refcount(void* addr); // COW: how many PTEs point at this page
+void page_pin(void* addr);              // mark a frame un-freeable (shared-libc masters)
 void slab_init_all(void);
 
 void init_paging(void);
