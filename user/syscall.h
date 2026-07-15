@@ -35,6 +35,8 @@
 #define SYS_TIME     31
 #define SYS_SLEEP    32
 #define SYS_SETFG    33
+#define SYS_SOCKET   34
+#define SYS_CONNECT  35
 
 #define TTY_CANON   0   /* kernel line discipline: echoed, backspace-edited lines */
 #define TTY_RAW     1   /* byte-at-a-time, no echo, arrows as ESC [ A/B/C/D */
@@ -367,6 +369,40 @@ static inline long setfg(long pid) {
  * Pipe fds only for now (their ends are reference-counted). Returns newfd or -1. */
 static inline long dup2(int oldfd, int newfd) {
     return syscall2(SYS_DUP2, oldfd, newfd);
+}
+
+/* --- TCP sockets (SOCK_STREAM only for now) -------------------------------- */
+#define AF_INET      2
+#define SOCK_STREAM  1
+#define SOCK_DGRAM   2
+
+/* Build a network-order IPv4 address from dotted octets a.b.c.d — matches the
+ * kernel convention (first octet in the low byte). Pass the result to connect(). */
+static inline unsigned int inet_ipv4(int a, int b, int c, int d) {
+    return (unsigned int)(a & 0xFF)        | ((unsigned int)(b & 0xFF) << 8) |
+           ((unsigned int)(c & 0xFF) << 16) | ((unsigned int)(d & 0xFF) << 24);
+}
+
+/* socket(AF_INET, SOCK_STREAM, 0): create a TCP socket. Returns a file descriptor
+ * usable with read()/write()/close() (send()/recv() are aliases), or -1. */
+static inline long socket(int domain, int type, int protocol) {
+    return syscall3(SYS_SOCKET, domain, type, protocol);
+}
+
+/* connect(fd, ip, port): open the TCP connection, blocking until the 3-way
+ * handshake completes. ip is network order (from inet_ipv4), port is host order.
+ * Returns 0 on success, -1 on failure. */
+static inline long connect(int fd, unsigned int ip, int port) {
+    return syscall3(SYS_CONNECT, fd, (long)ip, port);
+}
+
+/* send()/recv(): BSD-style aliases for write()/read() on a connected socket fd.
+ * The flags argument is accepted for familiarity and ignored. */
+static inline long send(int fd, const void* buf, long len, int flags) {
+    (void)flags; return write(fd, buf, len);
+}
+static inline long recv(int fd, void* buf, long len, int flags) {
+    (void)flags; return read(fd, buf, len);
 }
 
 #endif

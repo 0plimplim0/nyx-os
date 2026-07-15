@@ -1,32 +1,28 @@
 #include "kernel.h"
+#include "tcp.h"
 
 extern net_iface_t net_interfaces[8];
 
-#define MAX_SOCKETS 64
+// Userspace TCP sockets. A socket is a thin handle over a tcp.c connection; the
+// process fd table (syscall.c) stores UFD_SOCK_MAKE(id) and routes read/write/
+// close here. SOCK_STREAM (TCP) only for now — SOCK_DGRAM/UDP is future work.
+#define MAX_SOCKETS 32
+#define SOCK_STREAM 1
 
 typedef struct {
-    int fd;
-    int domain;
+    int in_use;
     int type;
-    int protocol;
-    uint32_t local_ip;
-    uint16_t local_port;
-    uint32_t remote_ip;
-    uint16_t remote_port;
-    int state;
-    void* rx_buffer;
-    void* tx_buffer;
-} socket_t;
+    int tcp_conn;    // tcp.c connection id, or -1 before connect()
+} nsock_t;
 
-static socket_t sockets[MAX_SOCKETS];
-static int socket_count = 0;
+static nsock_t nsocks[MAX_SOCKETS];
 
 extern int rtl8139_init(void);
 
 extern void arp_init(void);
 
 void init_net(void) {
-    memset_asm(sockets, 0, sizeof(sockets));
+    memset_asm(nsocks, 0, sizeof(nsocks));
     memset_asm(net_interfaces, 0, sizeof(net_interfaces));
 
     net_iface_t* lo = &net_interfaces[0];
@@ -57,60 +53,112 @@ void kernel_poll_net(void) {
         }
     }
     tcp_tick();           // drive TCP retransmit timers
+    tcp_echo_poll();      // service the built-in loopback echo (port 7)
 }
 
-int net_create_socket(int domain, int type, int protocol) {
-    if (socket_count >= MAX_SOCKETS) return -1;
-    int idx = socket_count++;
-    sockets[idx].fd = idx;
-    sockets[idx].domain = domain;
-    sockets[idx].type = type;
-    sockets[idx].protocol = protocol;
-    sockets[idx].state = 0;
-    return idx;
+// ---- Userspace TCP socket layer -------------------------------------------
+// Each blocking call drives the stack by polling in place (kernel_poll_net),
+// the same way dhcp_request/dns_resolve do: these run in a process's syscall
+// context, so a bounded busy-poll with an I/O delay between iterations advances
+// BOTH endpoints (the client and the loopback echo server) without yielding.
+
+static int nsock_valid(int s) {
+    return s >= 0 && s < MAX_SOCKETS && nsocks[s].in_use;
 }
 
-int net_bind(int sock, uint32_t ip, uint16_t port) {
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    sockets[sock].local_ip = ip;
-    sockets[sock].local_port = port;
+int nsock_create(int domain, int type, int protocol) {
+    (void)domain; (void)protocol;
+    if (type != SOCK_STREAM) return -1;           // TCP (SOCK_STREAM) only for now
+    for (int i = 0; i < MAX_SOCKETS; i++) {
+        if (!nsocks[i].in_use) {
+            nsocks[i].in_use = 1;
+            nsocks[i].type = type;
+            nsocks[i].tcp_conn = -1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int nsock_connect(int s, uint32_t ip, uint16_t port) {
+    if (!nsock_valid(s)) return -1;
+    static uint16_t ephemeral = 40000;            // client source-port pool
+    uint16_t sport = ephemeral++;
+    if (ephemeral >= 60000) ephemeral = 40000;
+    int c = tcp_connect(ip, port, sport);
+    if (c < 0) return -1;
+    nsocks[s].tcp_conn = c;
+    // Drive the 3-way handshake to completion: tcp_connect fired the SYN; the
+    // SYN-ACK is processed on poll. Bounded busy-wait (same pattern as HTTP).
+    for (int i = 0; i < 3000; i++) {
+        kernel_poll_net();
+        int st = tcp_state(c);
+        if (st == TCP_STATE_ESTABLISHED) return 0;
+        if (st == TCP_STATE_CLOSED) break;        // reset / handshake gave up
+        for (volatile int d = 0; d < 1500; d++) inb(0x80);
+    }
+    return -1;
+}
+
+int nsock_send(int s, const void* buf, int len) {
+    if (!nsock_valid(s) || nsocks[s].tcp_conn < 0 || len < 0) return -1;
+    // tcp_send returns the on-wire segment length (IP+TCP+payload); a socket
+    // write() must report the number of *payload* bytes accepted, so map any
+    // success to `len` and only a hard failure to -1.
+    int r = tcp_send(nsocks[s].tcp_conn, (const uint8_t*)buf, (uint32_t)len);
+    return (r < 0) ? -1 : len;
+}
+
+int nsock_recv(int s, void* buf, int len) {
+    if (!nsock_valid(s) || nsocks[s].tcp_conn < 0 || len <= 0) return -1;
+    int c = nsocks[s].tcp_conn;
+    // Block (busy-poll) until some data arrives, the peer fully closes, or a
+    // timeout. Returns >0 bytes, or 0 for EOF — like a real recv().
+    for (int i = 0; i < 6000; i++) {
+        int n = tcp_recv(c, (uint8_t*)buf, (uint32_t)len);
+        if (n > 0) return n;
+        if (tcp_state(c) == TCP_STATE_CLOSED) return 0;   // closed, nothing buffered
+        kernel_poll_net();
+        for (volatile int d = 0; d < 1500; d++) inb(0x80);
+    }
+    return 0;                                     // timed out -> treat as EOF
+}
+
+int nsock_close(int s) {
+    if (!nsock_valid(s)) return -1;
+    if (nsocks[s].tcp_conn >= 0) tcp_close(nsocks[s].tcp_conn);
+    nsocks[s].in_use = 0;
+    nsocks[s].tcp_conn = -1;
     return 0;
 }
 
-int net_listen(int sock, int backlog) {
-    (void)backlog;
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    sockets[sock].state = 1;
-    return 0;
+// ---- Built-in loopback TCP echo service (port 7) --------------------------
+// A tiny always-on, inetd-style echo server so a userspace socket program has
+// something to talk to over loopback (127.0.0.1) — fully self-contained, no
+// external host or NIC required. It also answers on the NIC address if reached.
+#define ECHO_PORT 7
+#define ECHO_MAX  8
+static int echo_listen = -1;
+static int echo_conns[ECHO_MAX];
+
+void tcp_echo_init(void) {
+    for (int i = 0; i < ECHO_MAX; i++) echo_conns[i] = -1;
+    echo_listen = tcp_listen(ECHO_PORT);
 }
 
-int net_accept(int sock) {
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    return net_create_socket(2, 1, 0);
-}
-
-int net_connect(int sock, uint32_t ip, uint16_t port) {
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    sockets[sock].remote_ip = ip;
-    sockets[sock].remote_port = port;
-    sockets[sock].state = 2;
-    return 0;
-}
-
-int net_send(int sock, const void* buf, size_t len) {
-    (void)buf;
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    return len;
-}
-
-int net_recv(int sock, void* buf, size_t len) {
-    (void)buf;
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    return len;
-}
-
-int net_close(int sock) {
-    if (sock < 0 || sock >= MAX_SOCKETS) return -1;
-    sockets[sock].state = 0;
-    return 0;
+void tcp_echo_poll(void) {
+    if (echo_listen < 0) return;
+    int c;
+    while ((c = tcp_accept(echo_listen)) >= 0) {          // adopt newly-accepted clients
+        for (int i = 0; i < ECHO_MAX; i++)
+            if (echo_conns[i] < 0) { echo_conns[i] = c; break; }
+    }
+    for (int i = 0; i < ECHO_MAX; i++) {                  // bounce back any received bytes
+        int ec = echo_conns[i];
+        if (ec < 0) continue;
+        if (tcp_state(ec) == TCP_STATE_CLOSED) { echo_conns[i] = -1; continue; }
+        uint8_t buf[512];
+        int n = tcp_recv(ec, buf, sizeof(buf));
+        if (n > 0) tcp_send(ec, buf, (uint32_t)n);
+    }
 }

@@ -425,8 +425,9 @@ void close_proc_fds(process_t* proc) {
     for (int i = 0; i < PROC_MAX_FDS; i++) {
         if (proc->ufd_inuse[i]) {
             int h = proc->ufd_handle[i];
-            if (h & UFD_PIPE_FLAG) pipe_close_end(UFD_PIPE_ID(h), UFD_PIPE_IS_WRITE(h));
-            else                   vfs_close(h);
+            if (h & UFD_PIPE_FLAG)      pipe_close_end(UFD_PIPE_ID(h), UFD_PIPE_IS_WRITE(h));
+            else if (h & UFD_SOCK_FLAG) nsock_close(UFD_SOCK_ID(h));
+            else                        vfs_close(h);
             proc->ufd_inuse[i] = 0;
         }
     }

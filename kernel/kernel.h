@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.51"
+#define KERNEL_VERSION "5.8.52"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -107,6 +107,8 @@ typedef __builtin_va_list va_list;
 #define SYS_TIME     31
 #define SYS_SLEEP    32
 #define SYS_SETFG    33
+#define SYS_SOCKET   34
+#define SYS_CONNECT  35
 
 /* SYS_TTYMODE modes. Canonical: read(0) returns a full line, echoed + backspace-
  * edited by the kernel. Raw: read(0) returns bytes as they arrive, NO echo, and
@@ -219,6 +221,14 @@ typedef struct {
 #define UFD_PIPE_MAKE(id, w) (UFD_PIPE_FLAG | ((id) << 1) | ((w) ? 1 : 0))
 #define UFD_PIPE_ID(h)       (((h) & 0x3FFFFFFF) >> 1)
 #define UFD_PIPE_IS_WRITE(h) ((h) & 1)
+
+// Socket fds share the same fd table with this (distinct) flag set, so
+// SYS_READ/WRITE/CLOSE route to the TCP socket layer (net.c) instead of the VFS.
+// The low bits carry the net-socket id (< MAX_SOCKETS). 0x20000000 doesn't
+// collide with the pipe flag (0x40000000) or a small VFS handle.
+#define UFD_SOCK_FLAG        0x20000000
+#define UFD_SOCK_MAKE(id)    (UFD_SOCK_FLAG | ((id) & 0xFFFF))
+#define UFD_SOCK_ID(h)       ((h) & 0xFFFF)
 
 #define MAX_PATH         256
 #define MAX_FILENAME     128
@@ -913,6 +923,16 @@ int rtl8139_init(void);
 void eth_poll(int iface_idx);
 void arp_init(void);
 int udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port, const uint8_t* data, uint32_t len, int iface_idx);
+
+// Userspace TCP socket layer (net.c) — backs SYS_SOCKET/SYS_CONNECT and the
+// socket branches of SYS_READ/WRITE/CLOSE. Returns a small net-socket id.
+int nsock_create(int domain, int type, int protocol);
+int nsock_connect(int s, uint32_t ip, uint16_t port);   // blocks until ESTABLISHED
+int nsock_send(int s, const void* buf, int len);
+int nsock_recv(int s, void* buf, int len);              // blocks until data or EOF
+int nsock_close(int s);
+void tcp_echo_init(void);   // start the loopback TCP echo service (port 7)
+void tcp_echo_poll(void);   // drive it from the net poll loop
 void udp_register_listener(uint16_t port, void (*handler)(uint8_t*, uint32_t, uint32_t, uint16_t));
 int dhcp_request(int iface_idx);
 void cmd_dhcp(int argc, char** argv);

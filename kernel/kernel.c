@@ -1789,7 +1789,7 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
     bootsplash_update(10, 23, "Initializing EXT2 filesystem...");
     printf("[INIT] Network Stack...\n"); init_net();
     bootsplash_update(11, 23, "Starting network stack...");
-    printf("[INIT] TCP...\n"); tcp_init();
+    printf("[INIT] TCP...\n"); tcp_init(); tcp_echo_init();
     bootsplash_update(12, 23, "Initializing TCP...");
     init_background_tasks();
     bootsplash_update(13, 23, "Registering background tasks...");

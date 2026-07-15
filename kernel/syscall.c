@@ -450,6 +450,15 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
                     kfree(pbuf);
                     return n;
                 }
+                if (internal & UFD_SOCK_FLAG) {                 /* socket write -> tcp_send */
+                    if (len > 4096) len = 4096;
+                    char* sbuf = (char*)kmalloc(len);
+                    if (!sbuf) return -1;
+                    int n = (copy_from_user(sbuf, a2, len) == 0)
+                                ? nsock_send(UFD_SOCK_ID(internal), sbuf, len) : -1;
+                    kfree(sbuf);
+                    return n;
+                }
                 uint32_t* off = ufd_offset_of(fd);              /* VFS file write */
                 if (len > 4096) len = 4096;
                 char* kbuf = (char*)kmalloc(len);
@@ -528,6 +537,14 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
                 kfree(pbuf);
                 return n;                                    /* 0 = EOF (all writers closed) */
             }
+            if (internal & UFD_SOCK_FLAG) {                 /* socket read -> tcp_recv (blocks) */
+                char* sbuf = (char*)kmalloc(count);
+                if (!sbuf) return -1;
+                int n = nsock_recv(UFD_SOCK_ID(internal), sbuf, count);
+                if (n > 0 && copy_to_user(a2, sbuf, n) != 0) n = -1;
+                kfree(sbuf);
+                return n;                                    /* 0 = peer closed the connection */
+            }
             uint32_t* off = ufd_offset_of((int)a1);
             char* kbuf = (char*)kmalloc(count);
             if (!kbuf) return -1;
@@ -545,7 +562,27 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
                 pipe_close_end(UFD_PIPE_ID(internal), UFD_PIPE_IS_WRITE(internal));
                 return 0;
             }
+            if (internal & UFD_SOCK_FLAG) {                 /* socket -> tcp_close */
+                nsock_close(UFD_SOCK_ID(internal));
+                return 0;
+            }
             return vfs_close(internal);
+        }
+        case SYS_SOCKET: {
+            int s = nsock_create((int)a1, (int)a2, (int)a3);
+            if (s < 0) return -1;
+            int ufd = ufd_alloc(UFD_SOCK_MAKE(s));
+            if (ufd < 0) { nsock_close(s); return -1; }     /* fd table full */
+            return ufd;
+        }
+        case SYS_CONNECT: {
+            /* connect(fd, ip, port): ip is a network-order IPv4 (low byte = first
+             * octet, like net_interfaces[].ip), port is host order. Blocks until
+             * the TCP handshake completes. */
+            int internal;
+            if (ufd_lookup((int)a1, &internal) != 0) return -1;
+            if (!(internal & UFD_SOCK_FLAG)) return -1;
+            return nsock_connect(UFD_SOCK_ID(internal), (uint32_t)a2, (uint16_t)a3);
         }
         case SYS_GETPID: {
             process_t* cur = get_cur_proc();
