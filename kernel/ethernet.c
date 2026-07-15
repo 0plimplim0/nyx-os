@@ -21,7 +21,7 @@ int eth_send(const uint8_t* dst_mac, uint16_t type, const uint8_t* data, uint32_
     eth_header_t* hdr = (eth_header_t*)packet;
     memcpy(hdr->dst_mac, dst_mac, 6);
     memcpy(hdr->src_mac, net_interfaces[iface_idx].mac, 6);
-    hdr->type = ((type >> 8) & 0xFF) | ((type & 0xFF) << 8);
+    hdr->type = htons(type);
     if (data && len > 0) memcpy(packet + ETH_HEADER_LEN, data, len);
     int result = rtl8139_send_packet(packet, ETH_HEADER_LEN + len);
     kfree(packet);
@@ -35,7 +35,7 @@ void eth_poll(int iface_idx) {
     if (len <= 0) return;
     if (len < ETH_HEADER_LEN) return;
     eth_header_t* hdr = (eth_header_t*)buffer;
-    uint16_t type = ((hdr->type << 8) & 0xFF00) | ((hdr->type >> 8) & 0x00FF);
+    uint16_t type = ntohs(hdr->type);
     uint8_t* payload = buffer + ETH_HEADER_LEN;
     uint32_t payload_len = len - ETH_HEADER_LEN;
     if (type == ETH_TYPE_ARP) arp_handle_packet(payload, payload_len);

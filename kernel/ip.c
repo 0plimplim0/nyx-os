@@ -133,7 +133,7 @@ int ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t* data, uint32_t len
     ip_header_t* ip = (ip_header_t*)packet;
     ip->ver_ihl = 0x45;
     ip->dscp_ecn = 0;
-    ip->total_len = ((packet_len << 8) & 0xFF00) | ((packet_len >> 8) & 0x00FF);
+    ip->total_len = htons((uint16_t)packet_len);
     ip->id = 0;
     ip->flags_frag = 0;
     ip->ttl = 64;
@@ -144,12 +144,11 @@ int ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t* data, uint32_t len
 
     if (len > 0 && data) memcpy(packet + sizeof(ip_header_t), data, len);
 
-    // ip_checksum sums big-endian 16-bit words and returns the network-order
-    // value as a host integer; store it byte-swapped so the header bytes are in
-    // network order (a plain assignment stored it LE-reversed, giving a bad
-    // checksum that made QEMU/slirp silently drop every IP packet we sent).
+    // ip_checksum returns the network-order value as a host integer; htons puts
+    // the bytes in network order in the header (a plain store reversed them,
+    // giving a bad checksum that made QEMU/slirp silently drop every IP packet).
     uint16_t ck = ip_checksum(packet, sizeof(ip_header_t));
-    ip->checksum = (uint16_t)((ck >> 8) | (ck << 8));
+    ip->checksum = htons(ck);
 
     if (is_loopback) {
         loopback_enqueue(packet, packet_len);
@@ -177,7 +176,7 @@ void ip_handle_packet(uint8_t* packet, uint32_t len) {
             // size the payload — small frames carry Ethernet padding that would
             // otherwise be counted as extra payload (e.g. a 58-byte SYN-ACK gets
             // padded to 60, adding 2 phantom bytes that broke the TCP ack number).
-            uint16_t ip_total = (uint16_t)((ip->total_len >> 8) | (ip->total_len << 8));
+            uint16_t ip_total = ntohs(ip->total_len);
             uint32_t ip_len = (ip_total >= sizeof(ip_header_t) && ip_total <= len) ? ip_total : len;
             uint32_t payload_len = ip_len - sizeof(ip_header_t);
             uint32_t src_ip = ip->src_ip;

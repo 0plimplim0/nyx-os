@@ -17,9 +17,9 @@ int udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port, const uint8_
     if (!packet) return -1;
 
     udp_header_t* udp = (udp_header_t*)packet;
-    udp->src_port = ((src_port << 8) & 0xFF00) | ((src_port >> 8) & 0x00FF);
-    udp->dst_port = ((dst_port << 8) & 0xFF00) | ((dst_port >> 8) & 0x00FF);
-    udp->length = ((packet_len << 8) & 0xFF00) | ((packet_len >> 8) & 0x00FF);
+    udp->src_port = htons(src_port);
+    udp->dst_port = htons(dst_port);
+    udp->length = htons((uint16_t)packet_len);
     udp->checksum = 0;
 
     if (len > 0 && data) memcpy(packet + sizeof(udp_header_t), data, len);
@@ -73,8 +73,8 @@ void udp_register_listener(uint16_t port, void (*handler)(uint8_t*, uint32_t, ui
 void udp_handle_packet(uint8_t* packet, uint32_t len, uint32_t src_ip) {
     if (len < sizeof(udp_header_t)) return;
     udp_header_t* udp = (udp_header_t*)packet;
-    uint16_t dst_port = ((udp->dst_port << 8) & 0xFF00) | ((udp->dst_port >> 8) & 0x00FF);
-    uint16_t src_port = ((udp->src_port << 8) & 0xFF00) | ((udp->src_port >> 8) & 0x00FF);
+    uint16_t dst_port = ntohs(udp->dst_port);
+    uint16_t src_port = ntohs(udp->src_port);
     uint8_t* payload = packet + sizeof(udp_header_t);
     uint32_t payload_len = len - sizeof(udp_header_t);
     for (int i = 0; i < 16; i++) {

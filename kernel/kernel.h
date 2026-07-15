@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.50"
+#define KERNEL_VERSION "5.8.51"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -447,6 +447,28 @@ typedef struct {
     uint32_t rx_packets;
     void* driver_data;
 } net_iface_t;
+
+// ============================================================
+// Network byte order (host x86 is little-endian; the wire is big-endian)
+// ============================================================
+// Centralizes the byte swaps every protocol used to open-code inline (the
+// ((x<<8)&0xFF00)|((x>>8)&0xFF) idiom, and uglier 32-bit versions). The
+// __builtin_bswap* forms compile to a single bswap/xchg. NOTE: IPv4 addresses
+// in this stack are stored in *network* order already (low byte = first octet,
+// e.g. 127.0.0.1 == 0x0100007F), so htonl/ntohl are only for fields that are
+// genuine host integers on the wire (TCP seq/ack) — IP addresses never pass
+// through them.
+static inline uint16_t htons(uint16_t x) { return __builtin_bswap16(x); }
+static inline uint16_t ntohs(uint16_t x) { return __builtin_bswap16(x); }
+static inline uint32_t htonl(uint32_t x) { return __builtin_bswap32(x); }
+static inline uint32_t ntohl(uint32_t x) { return __builtin_bswap32(x); }
+
+// Expand a network-order IPv4 address into four %d printf arguments, first octet
+// first:  printf("%d.%d.%d.%d", IP4_OCTETS(ip)).  Replaces the
+// ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF quad that was copy-pasted
+// across every network printer.
+#define IP4_OCTETS(ip) (int)((ip) & 0xFF), (int)(((ip) >> 8) & 0xFF), \
+                       (int)(((ip) >> 16) & 0xFF), (int)(((ip) >> 24) & 0xFF)
 
 // ============================================================
 // COLORES VGA

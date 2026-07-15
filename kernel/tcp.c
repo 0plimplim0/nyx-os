@@ -102,28 +102,26 @@ static int send_segment(tcp_conn_t* conn, uint8_t flags, const uint8_t* data, ui
     if (!seg) return -1;
 
     tcp_header_t* hdr = (tcp_header_t*)seg;
-    hdr->src_port = ((conn->src_port << 8) & 0xFF00) | ((conn->src_port >> 8) & 0x00FF);
-    hdr->dst_port = ((conn->dst_port << 8) & 0xFF00) | ((conn->dst_port >> 8) & 0x00FF);
-    hdr->seq = ((conn->seq << 24) & 0xFF000000) | ((conn->seq << 8) & 0x00FF0000)
-             | ((conn->seq >> 8) & 0x0000FF00) | ((conn->seq >> 24) & 0x000000FF);
-    hdr->ack = ((conn->ack << 24) & 0xFF000000) | ((conn->ack << 8) & 0x00FF0000)
-             | ((conn->ack >> 8) & 0x0000FF00) | ((conn->ack >> 24) & 0x000000FF);
-    // offset_flags and window are 16-bit fields that must be in network byte
-    // order on the wire; a plain LE store reversed them (bad data offset/flags,
-    // tiny window) so slirp rejected the segment.
+    hdr->src_port = htons(conn->src_port);
+    hdr->dst_port = htons(conn->dst_port);
+    hdr->seq = htonl(conn->seq);
+    hdr->ack = htonl(conn->ack);
+    // offset_flags and window are 16-bit fields that must be network byte order
+    // on the wire; a plain LE store reversed them (bad data offset/flags, tiny
+    // window) so slirp rejected the segment.
     uint16_t of = ((5 << 12) & 0xF000) | (flags & 0x003F);
-    hdr->offset_flags = (uint16_t)((of >> 8) | (of << 8));
-    hdr->window = (uint16_t)((0x2000 >> 8) | (0x2000 << 8));
+    hdr->offset_flags = htons(of);
+    hdr->window = htons(0x2000);
     hdr->checksum = 0;
     hdr->urgent = 0;
 
     if (data && data_len > 0)
         memcpy(seg + sizeof(tcp_header_t), data, data_len);
 
-    // tcp_checksum returns the network-order value as a host integer; store it
-    // byte-swapped so the header bytes are network order (same as the IP cksum).
+    // tcp_checksum returns the network-order value as a host integer; htons puts
+    // the bytes in network order in the header (same as the IP checksum).
     uint16_t ck = tcp_checksum(conn, seg, tcp_len);
-    hdr->checksum = (uint16_t)((ck >> 8) | (ck << 8));
+    hdr->checksum = htons(ck);
 
     // Arm retransmission for segments that consume sequence space (SYN / FIN /
     // data): buffer the exact bytes and record the ack that will clear them,
@@ -354,13 +352,11 @@ void tcp_handle_packet(uint8_t* packet, uint32_t len, uint32_t src_ip, uint32_t 
     if (len < sizeof(tcp_header_t)) return;
     tcp_header_t* hdr = (tcp_header_t*)packet;
 
-    uint16_t dst_port = ((hdr->dst_port << 8) & 0xFF00) | ((hdr->dst_port >> 8) & 0x00FF);
-    uint16_t src_port = ((hdr->src_port << 8) & 0xFF00) | ((hdr->src_port >> 8) & 0x00FF);
-    uint32_t seq = ((hdr->seq << 24) & 0xFF000000) | ((hdr->seq << 8) & 0x00FF0000)
-                 | ((hdr->seq >> 8) & 0x0000FF00) | ((hdr->seq >> 24) & 0x000000FF);
-    uint32_t ackno = ((hdr->ack << 24) & 0xFF000000) | ((hdr->ack << 8) & 0x00FF0000)
-                   | ((hdr->ack >> 8) & 0x0000FF00) | ((hdr->ack >> 24) & 0x000000FF);
-    uint16_t off_flags = (uint16_t)((hdr->offset_flags >> 8) | (hdr->offset_flags << 8));
+    uint16_t dst_port = ntohs(hdr->dst_port);
+    uint16_t src_port = ntohs(hdr->src_port);
+    uint32_t seq = ntohl(hdr->seq);
+    uint32_t ackno = ntohl(hdr->ack);
+    uint16_t off_flags = ntohs(hdr->offset_flags);
     uint8_t flags = off_flags & 0x003F;
     uint8_t data_offset = (off_flags >> 12) & 0x0F;
     uint32_t header_len = data_offset * 4;
@@ -415,17 +411,16 @@ void tcp_handle_packet(uint8_t* packet, uint32_t len, uint32_t src_ip, uint32_t 
         // Build a minimal RST segment
         uint8_t seg[sizeof(tcp_header_t)];
         tcp_header_t* rhdr = (tcp_header_t*)seg;
-        rhdr->src_port = ((dst_port << 8) & 0xFF00) | ((dst_port >> 8) & 0x00FF);
-        rhdr->dst_port = ((src_port << 8) & 0xFF00) | ((src_port >> 8) & 0x00FF);
+        rhdr->src_port = htons(dst_port);
+        rhdr->dst_port = htons(src_port);
         rhdr->seq = 0;
-        rhdr->ack = ((temp.ack << 24) & 0xFF000000) | ((temp.ack << 8) & 0x00FF0000)
-                   | ((temp.ack >> 8) & 0x0000FF00) | ((temp.ack >> 24) & 0x000000FF);
+        rhdr->ack = htonl(temp.ack);
         // offset_flags is a 16-bit field that must be network byte order on the
         // wire (like send_segment does). A plain LE store reversed the bytes, so
         // 0x5014 (hdrlen 5, RST|ACK) went out as 0x1450 — data offset 1 and, worse,
         // the RST bit landed outside the flags byte so the peer saw a bare ACK.
         uint16_t rof = (uint16_t)((5 << 12) | (TCP_FLAG_RST | TCP_FLAG_ACK));
-        rhdr->offset_flags = (uint16_t)((rof >> 8) | (rof << 8));
+        rhdr->offset_flags = htons(rof);
         rhdr->window = 0;
         rhdr->checksum = 0;
         rhdr->urgent = 0;
@@ -433,7 +428,7 @@ void tcp_handle_packet(uint8_t* packet, uint32_t len, uint32_t src_ip, uint32_t 
         // must be stored byte-swapped (same as send_segment) — a plain store put
         // the checksum bytes on the wire reversed, so peers/slirp dropped the RST.
         uint16_t rck = tcp_checksum(&temp, seg, sizeof(tcp_header_t));
-        rhdr->checksum = (uint16_t)((rck >> 8) | (rck << 8));
+        rhdr->checksum = htons(rck);
         ip_send(src_ip, 6, seg, sizeof(tcp_header_t), -1);
         return;
     }

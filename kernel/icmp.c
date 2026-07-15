@@ -31,8 +31,8 @@ int icmp_send_echo(uint32_t dst_ip, uint16_t id, uint16_t seq, int iface_idx) {
     icmp->type = ICMP_TYPE_ECHO_REQUEST;
     icmp->code = 0;
     icmp->checksum = 0;
-    icmp->id = ((id << 8) & 0xFF00) | ((id >> 8) & 0x00FF);
-    icmp->seq = ((seq << 8) & 0xFF00) | ((seq >> 8) & 0x00FF);
+    icmp->id = htons(id);
+    icmp->seq = htons(seq);
     for (uint32_t i = 0; i < 56; i++) icmp->data[i] = i;
     icmp->checksum = icmp_checksum(packet, packet_len);
     int result = ip_send(dst_ip, 1, packet, packet_len, iface_idx);
@@ -75,8 +75,8 @@ void icmp_handle_packet(uint8_t* packet, uint32_t len, uint32_t src_ip) {
     }
 
     if (icmp->type == ICMP_TYPE_ECHO_REPLY) {
-        uint16_t id  = ((icmp->id  << 8) & 0xFF00) | ((icmp->id  >> 8) & 0x00FF);
-        uint16_t seq = ((icmp->seq << 8) & 0xFF00) | ((icmp->seq >> 8) & 0x00FF);
+        uint16_t id  = ntohs(icmp->id);
+        uint16_t seq = ntohs(icmp->seq);
         if (id == ping_ident && (int)seq == ping_wait_seq) {
             ping_reply_tick = get_ticks();
             ping_reply_ttl  = ip_last_rx_ttl();
@@ -120,8 +120,7 @@ int icmp_ping(uint32_t dst_ip, int count, int iface_idx) {
             if (rtt < rtt_min) rtt_min = rtt;
             if (rtt > rtt_max) rtt_max = rtt;
             printf("%d bytes from %d.%d.%d.%d: icmp_seq=%d ttl=%d time=%d ms\n",
-                   ping_reply_len,
-                   dst_ip&0xFF, (dst_ip>>8)&0xFF, (dst_ip>>16)&0xFF, (dst_ip>>24)&0xFF,
+                   ping_reply_len, IP4_OCTETS(dst_ip),
                    seq, ping_reply_ttl, rtt);
         } else {
             printf("Request timeout for icmp_seq=%d\n", seq);
@@ -134,8 +133,7 @@ int icmp_ping(uint32_t dst_ip, int count, int iface_idx) {
     }
 
     int loss = count > 0 ? ((count - received) * 100) / count : 0;
-    printf("--- %d.%d.%d.%d ping statistics ---\n",
-           dst_ip&0xFF, (dst_ip>>8)&0xFF, (dst_ip>>16)&0xFF, (dst_ip>>24)&0xFF);
+    printf("--- %d.%d.%d.%d ping statistics ---\n", IP4_OCTETS(dst_ip));
     printf("%d packets transmitted, %d received, %d%% packet loss\n",
            count, received, loss);
     if (received > 0)

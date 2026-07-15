@@ -3,9 +3,6 @@
 
 #define DNS_PORT 53
 
-// Host<->network 16-bit swap (x86 is little-endian; the wire is big-endian).
-#define bswap16(x) ((uint16_t)((((x) & 0xFF) << 8) | (((x) >> 8) & 0xFF)))
-
 static uint32_t dns_server_ip = 0;
 
 void dns_set_server(uint32_t ip) { dns_server_ip = ip; }
@@ -31,8 +28,8 @@ static void dns_response_handler(uint8_t* data, uint32_t len, uint32_t src_ip, u
     (void)src_port;
     if (len < sizeof(dns_header_t)) return;
     dns_header_t* hdr = (dns_header_t*)data;
-    if (!(bswap16(hdr->flags) & DNS_FLAG_QR)) return;
-    uint16_t ancount = bswap16(hdr->ancount);
+    if (!(ntohs(hdr->flags) & DNS_FLAG_QR)) return;
+    uint16_t ancount = ntohs(hdr->ancount);
     if (ancount == 0) return;
 
     // Skip header
@@ -133,9 +130,9 @@ uint32_t dns_resolve(const char* hostname, int iface_idx) {
     __builtin_memset(pkt, 0, sizeof(pkt));
 
     dns_header_t* hdr = (dns_header_t*)pkt;
-    hdr->id = bswap16(0x1234);
-    hdr->flags = bswap16(0x0100); // standard query, recursion desired
-    hdr->qdcount = bswap16(1);    // was stored LE -> 256 questions on the wire
+    hdr->id = htons(0x1234);
+    hdr->flags = htons(0x0100);   // standard query, recursion desired
+    hdr->qdcount = htons(1);      // was stored LE -> 256 questions on the wire
 
     int off = sizeof(dns_header_t);
     int nlen = encode_dns_name(pkt + off, hostname);

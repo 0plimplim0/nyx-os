@@ -943,7 +943,7 @@ static void cmd_setip(int argc, char** argv) {
             net_interfaces[i].netmask = mask;
             net_interfaces[i].gateway = gw;
             printf("Set %s IP to %d.%d.%d.%d\n", net_interfaces[i].name,
-                ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF);
+                IP4_OCTETS(ip));
             return;
         }
     }
@@ -1008,8 +1008,7 @@ static void cmd_tcptest(int argc, char** argv) {
     }
     if (!dst_ip) { printf("tcptest: could not resolve %s\n", argv[1]); return; }
     printf("TCP test: connecting to %d.%d.%d.%d:%d...\n",
-           dst_ip&0xFF, (dst_ip>>8)&0xFF, (dst_ip>>16)&0xFF, (dst_ip>>24)&0xFF,
-           dst_port);
+           IP4_OCTETS(dst_ip), dst_port);
     int conn = tcp_connect(dst_ip, dst_port, 12345);
     if (conn < 0) {
         printf("TCP connect failed\n");
@@ -1488,7 +1487,7 @@ static void cmd_ifconfig(int argc, char** argv) {
                 net_interfaces[i].mac[0], net_interfaces[i].mac[1],
                 net_interfaces[i].mac[2], net_interfaces[i].mac[3],
                 net_interfaces[i].mac[4], net_interfaces[i].mac[5],
-                net_interfaces[i].ip&0xFF, (net_interfaces[i].ip>>8)&0xFF, (net_interfaces[i].ip>>16)&0xFF, (net_interfaces[i].ip>>24)&0xFF);
+                IP4_OCTETS(net_interfaces[i].ip));
         }
     }
 }
@@ -1504,8 +1503,7 @@ static void cmd_dns(int argc, char** argv) {
     if (iface_idx < 0) { printf("No network interface\n"); return; }
     uint32_t ip = dns_resolve(argv[1], iface_idx);
     if (ip) {
-        printf("%s -> %d.%d.%d.%d\n", argv[1],
-            ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF);
+        printf("%s -> %d.%d.%d.%d\n", argv[1], IP4_OCTETS(ip));
     } else {
         printf("dns: failed to resolve %s\n", argv[1]);
     }
@@ -1543,7 +1541,7 @@ static void cmd_ping(int argc, char** argv) {
         if (iface_idx >= 0) ip = dns_resolve(argv[1], iface_idx);
         if (!ip) { printf("ping: failed to resolve %s\n", argv[1]); return; }
     }
-    printf("PING %d.%d.%d.%d: 56 data bytes\n", ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF);
+    printf("PING %d.%d.%d.%d: 56 data bytes\n", IP4_OCTETS(ip));
 
     // Loopback / our-own-address pings need no NIC — they never touch the wire.
     int is_loopback = ((ip & 0xFF) == 0x7F);   // 127.0.0.0/8 (net order: low byte)
@@ -2004,8 +2002,7 @@ void nyxfetch(void) {
     for (int i = 0; i < 8; i++) {
         if (net_interfaces[i].name[0] && net_interfaces[i].ip) {
             uint32_t ip = net_interfaces[i].ip;
-            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d",
-                     ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF);
+            snprintf(ip_str, sizeof(ip_str), "%d.%d.%d.%d", IP4_OCTETS(ip));
             break;
         }
     }

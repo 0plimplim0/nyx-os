@@ -101,8 +101,7 @@ int dhcp_request(int iface_idx) {
                     memcpy(&dhcp_offered_ip, &rx[16], 4);
                     dhcp_server_ip = dhcp_rx_src;
                     printf("[DHCP] OFFER: IP %d.%d.%d.%d from server %d.%d.%d.%d\n",
-                        dhcp_offered_ip&0xFF, (dhcp_offered_ip>>8)&0xFF, (dhcp_offered_ip>>16)&0xFF, (dhcp_offered_ip>>24)&0xFF,
-                        dhcp_server_ip&0xFF, (dhcp_server_ip>>8)&0xFF, (dhcp_server_ip>>16)&0xFF, (dhcp_server_ip>>24)&0xFF);
+                        IP4_OCTETS(dhcp_offered_ip), IP4_OCTETS(dhcp_server_ip));
                     dhcp_state = 1;
                 }
 
@@ -122,9 +121,9 @@ int dhcp_request(int iface_idx) {
                         o2 += rx[o2+1] + 2;
                     }
                     printf("[DHCP] ACK: IP=%d.%d.%d.%d mask=%d.%d.%d.%d gw=%d.%d.%d.%d\n",
-                        dhcp_offered_ip&0xFF, (dhcp_offered_ip>>8)&0xFF, (dhcp_offered_ip>>16)&0xFF, (dhcp_offered_ip>>24)&0xFF,
-                        net_interfaces[iface_idx].netmask&0xFF, (net_interfaces[iface_idx].netmask>>8)&0xFF, (net_interfaces[iface_idx].netmask>>16)&0xFF, (net_interfaces[iface_idx].netmask>>24)&0xFF,
-                        net_interfaces[iface_idx].gateway&0xFF, (net_interfaces[iface_idx].gateway>>8)&0xFF, (net_interfaces[iface_idx].gateway>>16)&0xFF, (net_interfaces[iface_idx].gateway>>24)&0xFF);
+                        IP4_OCTETS(dhcp_offered_ip),
+                        IP4_OCTETS(net_interfaces[iface_idx].netmask),
+                        IP4_OCTETS(net_interfaces[iface_idx].gateway));
                     return 0;
                 }
             }

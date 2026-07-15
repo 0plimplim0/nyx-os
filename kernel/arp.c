@@ -64,11 +64,11 @@ static void arp_cache_add(uint32_t ip, const uint8_t* mac) {
 
 void arp_send_request(uint32_t target_ip, int iface_idx) {
     arp_packet_t arp;
-    arp.htype = (ARP_HTYPE_ETHERNET << 8) | (ARP_HTYPE_ETHERNET >> 8);
-    arp.ptype = 0x0008;
+    arp.htype = htons(ARP_HTYPE_ETHERNET);
+    arp.ptype = htons(ARP_PTYPE_IP);
     arp.hlen = ARP_HLEN;
     arp.plen = ARP_PLEN;
-    arp.oper = (ARP_OP_REQUEST << 8) | (ARP_OP_REQUEST >> 8);
+    arp.oper = htons(ARP_OP_REQUEST);
     memcpy(arp.sender_mac, net_interfaces[iface_idx].mac, 6);
     // IPs are stored network-order (low byte = first octet), so the wire bytes
     // are the uint32 bytes in ascending order.
@@ -88,7 +88,7 @@ void arp_send_request(uint32_t target_ip, int iface_idx) {
 void arp_handle_packet(uint8_t* packet, uint32_t len) {
     if (len < sizeof(arp_packet_t)) return;
     arp_packet_t* arp = (arp_packet_t*)packet;
-    uint16_t oper = ((arp->oper << 8) & 0xFF00) | ((arp->oper >> 8) & 0x00FF);
+    uint16_t oper = ntohs(arp->oper);
     uint32_t sender_ip = (uint32_t)arp->sender_ip[0] |
                          ((uint32_t)arp->sender_ip[1] << 8) |
                          ((uint32_t)arp->sender_ip[2] << 16) |
@@ -108,7 +108,7 @@ void arp_handle_packet(uint8_t* packet, uint32_t len) {
                 reply.ptype = arp->ptype;
                 reply.hlen = ARP_HLEN;
                 reply.plen = ARP_PLEN;
-                reply.oper = (ARP_OP_REPLY << 8) | (ARP_OP_REPLY >> 8);
+                reply.oper = htons(ARP_OP_REPLY);
                 memcpy(reply.sender_mac, net_interfaces[i].mac, 6);
                 memcpy(reply.sender_ip, arp->target_ip, 4);
                 memcpy(reply.target_mac, arp->sender_mac, 6);
@@ -123,8 +123,7 @@ void arp_handle_packet(uint8_t* packet, uint32_t len) {
 int arp_resolve(uint32_t ip, uint8_t* mac, int iface_idx) {
     if (arp_cache_lookup(ip, mac)) return 1;
     arp_send_request(ip, iface_idx);
-    printf("[ARP] Resolving %d.%d.%d.%d...\n",
-           ip&0xFF, (ip>>8)&0xFF, (ip>>16)&0xFF, (ip>>24)&0xFF);
+    printf("[ARP] Resolving %d.%d.%d.%d...\n", IP4_OCTETS(ip));
     // sleep() busy-waits on tick_count, which never advances (the PIT timer
     // doesn't fire — see kernel.c), so it would hang forever. Poll with a
     // port-I/O busy-wait between iterations instead.
