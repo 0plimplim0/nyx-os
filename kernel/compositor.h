@@ -81,5 +81,6 @@ int  window_get_ids(int* ids, int max);
 void compositor_run(void);
 void compositor_quit(void);
 int compositor_is_running(void);
+window_t* compositor_open_editor(const char* path);  // open Text Editor, optionally with a file
 
 #endif

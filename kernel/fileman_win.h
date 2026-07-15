@@ -37,6 +37,9 @@ typedef struct {
     int drag_start_x, drag_start_y;
     int drag_cur_x, drag_cur_y;
     int drag_mode; // 0=none, 1=move (cut), 2=copy
+    // Double-click detection (open a file in the Text Editor)
+    uint32_t last_click_tick;
+    int last_click_idx;
 } fileman_win_t;
 
 fileman_win_t* fileman_create_ctx(void);

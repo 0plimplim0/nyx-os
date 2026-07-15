@@ -22,6 +22,7 @@ fileman_win_t* fileman_create_ctx(void) {
     fm->drag_active = 0;
     fm->drag_file_idx = -1;
     fm->drag_mode = 0;
+    fm->last_click_idx = -1;
     fm->search_active = 0;
     fm->search_pattern[0] = '\0';
     fm->search_count = 0;
@@ -508,21 +509,36 @@ void fileman_win_click(window_t* win, int mx, int my, int btn) {
             int real_idx = fm->search_active ? fm->search_indices[idx] : idx;
             fm->sel_index = real_idx;
             if (fm->entry_types[real_idx]) {
+                fm->last_click_idx = -1;
                 fileman_cd(fm, fm->entries[real_idx], win);
             } else {
                 char path[256];
                 fileman_get_path(fm, fm->entries[real_idx], path, sizeof(path));
-                int fd = vfs_open(path, 0, 0);
-                if (fd >= 0) {
-                    char buf[512];
-                    int n = vfs_read(fd, buf, sizeof(buf)-1);
-                    vfs_close(fd);
-                    if (n > 0) {
-                        buf[n] = '\0';
-                        snprintf(fm->status, sizeof(fm->status), "%s (%d bytes): %.200s", fm->entries[real_idx], n, buf);
-                    } else {
-                        snprintf(fm->status, sizeof(fm->status), "%s (empty)", fm->entries[real_idx]);
+                uint32_t now = get_ticks();
+                if (fm->last_click_idx == real_idx && (now - fm->last_click_tick) < 400) {
+                    // Second click on the same file within the double-click window:
+                    // open it in a Text Editor window.
+                    if (compositor_open_editor(path))
+                        snprintf(fm->status, sizeof(fm->status), "Opened in editor: %s", fm->entries[real_idx]);
+                    else
+                        snprintf(fm->status, sizeof(fm->status), "Cannot open editor");
+                    fm->last_click_idx = -1;   // don't re-fire on a third click
+                } else {
+                    // First click: select + preview the first bytes in the status bar.
+                    int fd = vfs_open(path, 0, 0);
+                    if (fd >= 0) {
+                        char buf[512];
+                        int n = vfs_read(fd, buf, sizeof(buf)-1);
+                        vfs_close(fd);
+                        if (n > 0) {
+                            buf[n] = '\0';
+                            snprintf(fm->status, sizeof(fm->status), "%s (%d bytes) - double-click to edit: %.170s", fm->entries[real_idx], n, buf);
+                        } else {
+                            snprintf(fm->status, sizeof(fm->status), "%s (empty) - double-click to edit", fm->entries[real_idx]);
+                        }
                     }
+                    fm->last_click_tick = now;
+                    fm->last_click_idx = real_idx;
                 }
             }
         }
@@ -807,20 +823,13 @@ void fileman_win_key(window_t* win, int key) {
             if (fm->entry_types[fm->sel_index]) {
                 fileman_cd(fm, fm->entries[fm->sel_index], win);
             } else {
+                // Enter on a file opens it in the Text Editor (like double-click).
                 char path[256];
                 fileman_get_path(fm, fm->entries[fm->sel_index], path, sizeof(path));
-                int fd = vfs_open(path, 0, 0);
-                if (fd >= 0) {
-                    char buf[512];
-                    int n = vfs_read(fd, buf, sizeof(buf)-1);
-                    vfs_close(fd);
-                    if (n > 0) {
-                        buf[n] = '\0';
-                        snprintf(fm->status, sizeof(fm->status), "%s (%d bytes): %.200s", fm->entries[fm->sel_index], n, buf);
-                    } else {
-                        snprintf(fm->status, sizeof(fm->status), "%s (empty)", fm->entries[fm->sel_index]);
-                    }
-                }
+                if (compositor_open_editor(path))
+                    snprintf(fm->status, sizeof(fm->status), "Opened in editor: %s", fm->entries[fm->sel_index]);
+                else
+                    snprintf(fm->status, sizeof(fm->status), "Cannot open editor");
             }
             return;
         }

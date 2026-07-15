@@ -530,6 +530,21 @@ static window_t* find_window(int id) {
     return NULL;
 }
 
+// Open a Text Editor window, optionally pre-loaded with a file. Shared by the
+// start-menu / desktop "Text Editor" action (path = NULL → blank document) and
+// the file manager, which passes the path of a file the user opened. Returns the
+// new window, or NULL if the window pool is full / allocation failed.
+window_t* compositor_open_editor(const char* path) {
+    window_t* ewin = window_create(150, 120, 600, 400, "Text Editor", editor_win_draw);
+    if (!ewin) return NULL;
+    ewin->reserved = editor_create_ctx();
+    if (!ewin->reserved) { window_destroy(ewin->id); return NULL; }
+    ewin->on_click = editor_win_click;
+    ewin->on_key = editor_win_key;
+    if (path && path[0]) editor_load_file((editor_win_t*)ewin->reserved, path);
+    return ewin;
+}
+
 static void do_start_menu_action(int idx) {
     start_menu_open = 0;
     redraw_all();
@@ -549,16 +564,7 @@ static void do_start_menu_action(int idx) {
             }
             break;
         case 1: // Text Editor
-            {
-                window_t* ewin = window_create(150, 120, 600, 400, "Text Editor", editor_win_draw);
-                if (ewin) {
-                    ewin->reserved = editor_create_ctx();
-                    if (ewin->reserved) {
-                        ewin->on_click = editor_win_click;
-                        ewin->on_key = editor_win_key;
-                    }
-                }
-            }
+            compositor_open_editor(NULL);
             break;
         case 2: // Image Viewer
             {

@@ -83,6 +83,12 @@ static void editor_open(editor_win_t* ed, const char* path) {
     snprintf(ed->status, sizeof(ed->status), "Opened: %s (%u bytes)", path, size);
 }
 
+// Public entry point: load `path` into this editor context. Used by the file
+// manager to open a file the user picked; wraps the internal loader.
+void editor_load_file(editor_win_t* ed, const char* path) {
+    if (ed && path && path[0]) editor_open(ed, path);
+}
+
 static void editor_insert_char(editor_win_t* ed, char c) {
     int y = ed->cursor_y;
     if (y >= ed->line_count) return;

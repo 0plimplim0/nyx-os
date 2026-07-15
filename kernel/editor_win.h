@@ -22,5 +22,6 @@ editor_win_t* editor_create_ctx(void);
 void editor_win_draw(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch);
 void editor_win_click(window_t* win, int mx, int my, int btn);
 void editor_win_key(window_t* win, int key);
+void editor_load_file(editor_win_t* ed, const char* path);  // load `path` into this editor
 
 #endif
