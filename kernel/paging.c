@@ -48,28 +48,6 @@ void* get_phys_addr(void* virtual_addr) {
 }
 
 // Map a page in a specific PML4
-// Extract the physical base of a present intermediate page-table entry, using the
-// FULL physical-address mask (bits 51:12) — not `& ~0xFFF`, which leaves the NX bit
-// (63) and any reserved high bits in place and so turns a CORRUPTED entry into a
-// non-canonical pointer that #GPs the moment it's dereferenced. A well-formed
-// intermediate entry never has bits 63:52 set (this kernel never marks an
-// intermediate NX), so if any are, the table has been corrupted — dump who/where and
-// panic HERE with the offending value instead of crashing opaquely one deref later.
-#define PT_ADDR_BITS   0x000FFFFFFFFFF000ULL
-#define PT_RSVD_BITS   0xFFF0000000000000ULL   // bits 63:52 — must be clear on a table entry
-static uint64_t* pt_next(uint64_t entry, const char* level, uint64_t* pml4,
-                         uint64_t vaddr, int idx) {
-    if (entry & PT_RSVD_BITS) {
-        process_t* p = get_current_process();
-        printf("\n[MAPCORRUPT] %s entry=0x%lx has reserved bits set\n", level, entry);
-        printf("[MAPCORRUPT] pml4=%p vaddr=0x%lx idx=%d pid=%u comm=%s\n",
-               (void*)pml4, vaddr, idx, p ? (unsigned)p->pid : 0, p ? p->comm : "?");
-        kernel_panic("page-table corruption: %s=0x%lx (vaddr 0x%lx, pid %u)",
-                     level, entry, vaddr, p ? (unsigned)p->pid : 0);
-    }
-    return (uint64_t*)(entry & PT_ADDR_BITS);
-}
-
 static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
     uint64_t vaddr = (uint64_t)virt;
     int pml4_idx = (vaddr >> 39) & 0x1FF;
@@ -85,7 +63,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pdpt, 0, 4096);
         pml4[pml4_idx] = (uint64_t)pdpt | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pdpt = pt_next(pml4e, "pml4e", pml4, vaddr, pml4_idx);
+        pdpt = (uint64_t*)(pml4e & ~0xFFF);
     }
 
     uint64_t pdpte = pdpt[pdpt_idx];
@@ -96,7 +74,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pd, 0, 4096);
         pdpt[pdpt_idx] = (uint64_t)pd | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pd = pt_next(pdpte, "pdpte", pml4, vaddr, pdpt_idx);
+        pd = (uint64_t*)(pdpte & ~0xFFF);
     }
 
     uint64_t pde = pd[pd_idx];
@@ -107,7 +85,7 @@ static void map_pml4(uint64_t* pml4, void* phys, void* virt, uint64_t flags) {
         memset_asm(pt, 0, 4096);
         pd[pd_idx] = (uint64_t)pt | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0);
     } else {
-        pt = pt_next(pde, "pde", pml4, vaddr, pd_idx);
+        pt = (uint64_t*)(pde & ~0xFFF);
     }
 
     pt[pt_idx] = (uint64_t)phys | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER ? PAGE_USER : 0) | (flags & PAGE_NX);
@@ -251,17 +229,6 @@ static uint64_t* pte_ptr(uint64_t* pml4, uint64_t virt, int create) {
         }
     }
     return &tbl[idx[3]];
-}
-
-// Diagnostic: return the leaf PTE for `virt` in `pml4` (0 if any level is absent
-// or a huge mapping intervenes). Read-only walk through the identity-mapped page
-// tables; never allocates. Used by the ring-3 fault handler to tell a genuine
-// mapping gap (PTE absent in the process's own pd) from a wrong-CR3 fault (PTE
-// present in the pd, so the process was resumed on the wrong address space).
-uint64_t vm_lookup_pte(uint64_t* pml4, uint64_t virt) {
-    if (!pml4) return 0;
-    uint64_t* pte = pte_ptr(pml4, virt, 0);
-    return pte ? *pte : 0;
 }
 
 // Map a READ-ONLY user page (present, user, not writable; NX unless exec). Used

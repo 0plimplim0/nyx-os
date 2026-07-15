@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.47"
+#define KERNEL_VERSION "5.8.46"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -196,7 +196,6 @@ typedef struct { uint64_t start, end; int writable, exec; } vm_region_t;
 // Walk a process address space, coalescing runs of present user pages with the
 // same permissions into regions (for /proc/<pid>/maps). Returns the count.
 int vm_collect_regions(uint64_t* pml4, vm_region_t* out, int max);
-uint64_t vm_lookup_pte(uint64_t* pml4, uint64_t virt);   // leaf PTE (0 if absent) — diagnostic walk
 long     do_dlopen(const char* path);              // SYS_DLOPEN: map a .so into this process
 uint64_t do_dlsym(long handle, const char* name);  // SYS_DLSYM: resolve a symbol to its VA
 

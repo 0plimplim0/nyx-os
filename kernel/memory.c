@@ -82,20 +82,6 @@ void free_page(void* addr) {
     if (page_idx >= total_pages) return;
     // Shared page (COW): drop one reference, keep the frame for the others.
     if (page_refcount[page_idx] > 1) { page_refcount[page_idx]--; return; }
-    // DIAGNOSTIC: freeing a page whose bitmap bit is already SET means it is
-    // already free — a double-free. If it was reallocated in between, this frees a
-    // LIVE page, causing the next alloc_page to hand out a page that's still in use
-    // (the page-table-reused-as-code corruption). Catch it red-handed with the frame
-    // number and the process that triggered it.
-    if (page_bitmap[page_idx / 32] & (1u << (page_idx % 32))) {
-        extern process_t* get_current_process(void);
-        process_t* p = get_current_process();
-        printf("\n[DOUBLEFREE] page %u (phys 0x%lx) freed while already free; pid=%u comm=%s\n",
-               page_idx, (uint64_t)page_idx * PAGE_SIZE,
-               p ? (unsigned)p->pid : 0, p ? p->comm : "?");
-        kernel_panic("double-free of physical page %u (pid %u)",
-                     page_idx, p ? (unsigned)p->pid : 0);
-    }
     page_refcount[page_idx] = 0;
     page_bitmap[page_idx / 32] |= 1 << (page_idx % 32);
     free_pages++;

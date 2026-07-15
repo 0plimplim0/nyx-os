@@ -61,19 +61,6 @@ void isr_handler(uint64_t int_no, uint64_t rip, uint64_t error, uint64_t cs) {
                    cur ? (unsigned)cur->pid : 0, cur ? cur->comm : "?",
                    exception_names[int_no], int_no, rip, error);
             if (int_no == 14) printf(" fault-addr 0x%lx", cr2);
-            // Diagnostic: dump the faulting VA's leaf PTE in the process's own page
-            // directory. (read_cr3() here is always the kernel CR3 — isr_common
-            // switches to it before this handler runs — so it's not the faulting
-            // CR3.) A PTE with reserved/high bits set is page-table corruption; an
-            // absent PTE on a shared-libc address is a lost/never-established mapping.
-            if (int_no == 14 && cur) {
-                uint64_t pd = (uint64_t)cur->page_directory;
-                uint64_t pte = vm_lookup_pte((uint64_t*)pd, cr2);
-                const char* tag = !(pte & 1) ? "not-present in pd"
-                                : (pte & 0xFFF0000000000000ULL) ? "CORRUPT (reserved bits set)"
-                                : "present in pd";
-                printf("\n[fault]   pd=0x%lx pte=0x%lx (%s)", pd, pte, tag);
-            }
             printf(" -> killed (signal %d)\n", signo);
             if (cur) {
                 cur->exit_code = 128 + signo;   // waitpid status convention: 128 + signo
