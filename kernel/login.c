@@ -151,6 +151,15 @@ static void draw_panel(int px, int py, int mode, int field, int avatar,
     font_draw_string(px + (BOX_W - (int)strlen(hint) * 8) / 2, py + BOX_H - 20, hint, fb_rgb(130, 120, 160), bg);
 }
 
+// Redraw ONLY the field currently being typed into. Typing changes just the field
+// text, so there's no need to repaint the whole panel (box + all four avatars +
+// labels) on every keystroke — doing that hammered the framebuffer directly and
+// destabilised the login on real hardware. Field geometry matches draw_panel.
+static void draw_active_field(int px, int py, int field, const char* user, const char* pass) {
+    if (field == 0)      draw_field(px + 20, py + 62,  BOX_W - 40, 1, user, 0);
+    else if (field == 1) draw_field(px + 20, py + 114, BOX_W - 40, 1, pass, 1);
+}
+
 int login_screen(void) {
     uint32_t fw = fb_get_width(), fh = fb_get_height();
 
@@ -218,13 +227,13 @@ int login_screen(void) {
             if (c == '\b' || c == 0x7F) {
                 if (field == 0 && user_pos > 0) user[--user_pos] = '\0';
                 else if (field == 1 && pass_pos > 0) pass[--pass_pos] = '\0';
-                draw_panel(px, py, mode, field, avatar, user, pass, msg);
+                draw_active_field(px, py, field, user, pass);   // light: just this field
                 continue;
             }
             if (c >= 32 && c < 127) {
                 if (field == 0 && user_pos < 31) { user[user_pos++] = c; user[user_pos] = '\0'; }
                 else if (field == 1 && pass_pos < 63) { pass[pass_pos++] = c; pass[pass_pos] = '\0'; }
-                draw_panel(px, py, mode, field, avatar, user, pass, msg);
+                draw_active_field(px, py, field, user, pass);   // light: just this field
                 continue;
             }
         }
