@@ -242,6 +242,48 @@ void command_complete(const char* partial, char* out, int out_size, int* match_c
     }
 }
 
+// Run a userspace ELF as a foreground job: spawn it (forwarding argv), block —
+// repainting the desktop so it stays live — until it exits, then reap it and print
+// the exit code. Shared by `exec` and the shell's auto-exec fallback.
+static void run_foreground_elf(const char* path, char* const* argv, int argc) {
+    int pid = spawn_user_path_args(path, argv, argc);
+    if (pid < 0) {
+        printf("exec: could not load %s (err %d)\n", path, pid);
+        return;
+    }
+    extern uint32_t g_foreground_pid;
+    g_foreground_pid = (uint32_t)pid;         // Ctrl-C posts SIGINT here while it runs
+    for (;;) {
+        process_t* child = find_process((uint32_t)pid);
+        if (!child || child->state == PROC_ZOMBIE) break;
+        if (child->state == PROC_STOPPED)     // no job control here: just resume
+            signal_raise(child, SIGCONT);
+        compositor_redraw_now();
+        sleep(60);
+    }
+    int code = find_process((uint32_t)pid) ? kwait((uint32_t)pid) : 0;  // reap
+    g_foreground_pid = 0;
+    compositor_redraw_now();
+    printf("[exec] PID %d exited (code %d)\n", pid, code);
+}
+
+// Resolve a bare command name to a userspace ELF path in the initramfs. A name that
+// already contains '/' is used verbatim; otherwise "/<name>.elf" then "/<name>" are
+// tried. Returns 1 and fills `out` if a file exists there, else 0.
+static int resolve_user_elf(const char* name, char* out, int outsz) {
+    int fd;
+    if (strchr(name, '/')) {
+        strncpy(out, name, outsz - 1); out[outsz - 1] = '\0';
+        if ((fd = vfs_open(out, 0, 0)) >= 0) { vfs_close(fd); return 1; }
+        return 0;
+    }
+    snprintf(out, outsz, "/%s.elf", name);
+    if ((fd = vfs_open(out, 0, 0)) >= 0) { vfs_close(fd); return 1; }
+    snprintf(out, outsz, "/%s", name);
+    if ((fd = vfs_open(out, 0, 0)) >= 0) { vfs_close(fd); return 1; }
+    return 0;
+}
+
 void execute_command(const char* cmd_line) {
     if (!cmd_line || !*cmd_line) return;
     char cmd_copy[256];
@@ -260,6 +302,14 @@ void execute_command(const char* cmd_line) {
             commands[i].func(argc, argv);
             return;
         }
+    }
+    // Not a builtin — auto-exec a matching userspace ELF (e.g. `wget http://…`,
+    // `grep foo bar`) so tools run without the `exec` prefix. argv[0] is the typed
+    // name; the child gets the full argv.
+    char path[128];
+    if (resolve_user_elf(argv[0], path, sizeof(path))) {
+        run_foreground_elf(path, argv, argc);
+        return;
     }
     // Command not found - output will be captured by putchar hook
     printf("Command not found: %s\n", argv[0]);
@@ -781,29 +831,9 @@ static void cmd_exec(int argc, char** argv) {
     if (argc < 2) { printf("Usage: exec <file> [args...]\n"); return; }
     // Forward the rest of the line as the program's argv (argv[0] = the path), so
     // `exec /wget.elf http://...` runs a userspace tool with arguments straight from
-    // the kernel shell — no need to drop into /sh.elf first.
-    int pid = spawn_user_path_args(argv[1], &argv[1], argc - 1);
-    if (pid < 0) {
-        printf("exec: could not load %s (err %d)\n", argv[1], pid);
-        return;
-    }
-    extern uint32_t g_foreground_pid;
-    g_foreground_pid = (uint32_t)pid;         // Ctrl-C posts SIGINT here while it runs
-    // Non-blocking foreground wait: repaint at ~16 fps while the job runs. Only
-    // reap_zombies runs on this (compositor) thread and it's busy in this loop,
-    // so the child stays a zombie until we collect it below — no lost exit code.
-    for (;;) {
-        process_t* child = find_process((uint32_t)pid);
-        if (!child || child->state == PROC_ZOMBIE) break;
-        if (child->state == PROC_STOPPED)         // no job control here: a Ctrl-Z'd
-            signal_raise(child, SIGCONT);         // direct-exec job just resumes
-        compositor_redraw_now();
-        sleep(60);
-    }
-    int code = find_process((uint32_t)pid) ? kwait((uint32_t)pid) : 0;  // reap (immediate)
-    g_foreground_pid = 0;
-    compositor_redraw_now();                  // final frame + the prompt below
-    printf("[exec] PID %d exited (code %d)\n", pid, code);
+    // the kernel shell. The foreground-wait machinery lives in run_foreground_elf(),
+    // shared with the auto-exec fallback (a bare `wget …` line).
+    run_foreground_elf(argv[1], &argv[1], argc - 1);
 }
 
 // Run an ELF as a BACKGROUND job: spawn it and return immediately. It runs
