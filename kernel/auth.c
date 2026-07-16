@@ -2,11 +2,12 @@
 #include "auth.h"
 #include "ext2.h"
 #include "sha256.h"
+#include "rtc.h"
 
 #define XENC_KEY     "NyxOS_AUTH_v5.3"
 #define XENC_KEY_LEN 15
 #define MAX_FALLBACK_USERS 8
-#define SALT_SECRET  "NyxOS_k3rn3l_s34lt_v5.3"
+#define AUTH_MIN_PASS 4        /* minimum password length enforced by useradd */
 #define SALT_HEX_LEN 16
 
 /* ------------------------------------------------------------------ */
@@ -29,14 +30,41 @@ static void hash_password(const char* password, const char* salt_hex,
                        salt, 8, iterations, out);
 }
 
-static void gen_salt_hex(const char* username, char salt_hex[SALT_HEX_LEN + 1]) {
-    uint8_t hash[SHA256_DIGEST_SIZE];
-    hmac_sha256((const uint8_t*)SALT_SECRET, strlen(SALT_SECRET),
-                (const uint8_t*)username, strlen(username), hash);
+/* Mix entropy from RDTSC (the CPU cycle counter — its low bits are essentially
+ * unpredictable), the 1000 Hz timer tick, and the RTC clock into a splitmix64
+ * stream, and emit a random 8-byte salt as hex. This replaces a salt that used
+ * to be derived DETERMINISTICALLY from the username with a compile-time secret:
+ * that made identical username/password pairs hash identically on every NyxOS
+ * install (precomputable / rainbow-table-able). A random salt stored per
+ * /etc/passwd entry — which the verifier already reads back — is the standard
+ * fix, so identical passwords now yield different hashes. */
+static uint64_t salt_rng = 0x243F6A8885A308D3ULL;   /* pi fractional bits */
+
+static inline uint64_t rdtsc64(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static uint64_t salt_next(void) {
+    uint64_t z = (salt_rng += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static void gen_random_salt(char salt_hex[SALT_HEX_LEN + 1]) {
+    extern volatile uint32_t tick_count;
+    salt_rng ^= rdtsc64();
+    salt_rng ^= (uint64_t)tick_count << 20;
+    salt_rng ^= (uint64_t)rtc_read_register(RTC_SECONDS) << 8;
+    salt_rng ^= (uint64_t)rtc_read_register(RTC_MINUTES) << 40;
+    salt_rng ^= rdtsc64() << 1;            /* a second sample adds timing jitter */
     static const char hexdig[] = "0123456789abcdef";
     for (int i = 0; i < 8; i++) {
-        salt_hex[i * 2]     = hexdig[(hash[i] >> 4) & 0xF];
-        salt_hex[i * 2 + 1] = hexdig[hash[i] & 0xF];
+        uint8_t b = (uint8_t)(salt_next() >> 24);
+        salt_hex[i * 2]     = hexdig[(b >> 4) & 0xF];
+        salt_hex[i * 2 + 1] = hexdig[b & 0xF];
     }
     salt_hex[SALT_HEX_LEN] = '\0';
 }
@@ -114,7 +142,7 @@ static void add_fallback(const char* user, const char* pass) {
     fallback_user_t* u = &fb_users[fb_count++];
     strncpy(u->username, user, AUTH_MAX_USER - 1);
     u->username[AUTH_MAX_USER - 1] = '\0';
-    gen_salt_hex(user, u->salt_hex);
+    gen_random_salt(u->salt_hex);
     u->iterations = PBKDF2_ITERATIONS;
     hash_password(pass, u->salt_hex, u->iterations, u->hash);
 }
@@ -193,7 +221,7 @@ int auth_setup(void) {
     // survive reboots. This path used to be unreachable — the old guard treated
     // "no passwd file" the same as "no disk" and fell back without persisting.
     char salt_hex[SALT_HEX_LEN + 1];
-    gen_salt_hex("nyx", salt_hex);
+    gen_random_salt(salt_hex);
     uint8_t hash[SHA256_DIGEST_SIZE];
     hash_password("nyx", salt_hex, PBKDF2_ITERATIONS, hash);
     char entry[128 + SHA256_DIGEST_SIZE * 2];
@@ -255,6 +283,15 @@ int auth_verify(const char* username, const char* password) {
 void auth_add_user(const char* username, const char* password) {
     if (!username || !password) return;
 
+    // Basic account policy: a non-empty username and a password of at least
+    // AUTH_MIN_PASS characters (applies whether the account persists to disk or
+    // lands in the in-memory fallback table).
+    if (username[0] == '\0') { printf("[AUTH] username cannot be empty\n"); return; }
+    if (strlen(password) < AUTH_MIN_PASS) {
+        printf("[AUTH] password too short (minimum %d characters)\n", AUTH_MIN_PASS);
+        return;
+    }
+
     if (ext2_fs.block_size == 0 || !passwd_exists()) {
         if (fallback_add(username, password) == 0)
             printf("[AUTH] Added fallback user '%s' (PBKDF2-HMAC-SHA256, %d users)\n",
@@ -279,7 +316,7 @@ void auth_add_user(const char* username, const char* password) {
     }
 
     char salt_hex[SALT_HEX_LEN + 1];
-    gen_salt_hex(username, salt_hex);
+    gen_random_salt(salt_hex);
     uint8_t hash[SHA256_DIGEST_SIZE];
     hash_password(password, salt_hex, PBKDF2_ITERATIONS, hash);
 

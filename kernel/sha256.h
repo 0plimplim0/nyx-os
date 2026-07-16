@@ -5,7 +5,7 @@
 
 #define SHA256_DIGEST_SIZE 32
 #define SHA256_BLOCK_SIZE  64
-#define PBKDF2_ITERATIONS  1000
+#define PBKDF2_ITERATIONS  10000   /* KDF work factor; stored per passwd entry, so raising it stays backward-compatible */
 
 typedef struct {
     uint8_t  data[SHA256_BLOCK_SIZE];

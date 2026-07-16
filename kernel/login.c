@@ -20,6 +20,8 @@ extern volatile char kbd_buffer[256];
 extern volatile int kbd_head;
 extern volatile int kbd_tail;
 
+#define LOGIN_MAX_ATTEMPTS 3   /* lock out (reboot) after this many failed logins */
+
 static void draw_field(int x, int y, int w, int active, const char* text, int masked) {
     uint32_t bd = active ? fb_rgb(150,120,240) : fb_rgb(68,58,92);
     uint32_t bg = active ? fb_rgb(52,44,80) : fb_rgb(40,34,56);
@@ -81,57 +83,82 @@ int login_screen(void) {
     draw_field(ux, uy, uw, 1, NULL, 0);
     draw_field(pfx, pfy, pfw, 0, NULL, 1);
 
-    char user[32], pass[64];
-    int user_pos = 0, pass_pos = 0, field = 0;
-    user[0] = pass[0] = '\0';
+    int attempts = 0;
 
-    serial_puts("[LOGIN] Ready.\n");
+    for (;;) {
+        char user[32], pass[64];
+        int user_pos = 0, pass_pos = 0, field = 0;
+        user[0] = pass[0] = '\0';
 
-    while (1) {
-        __asm__ volatile("cli");
-        char c = 0;
-        if (kbd_tail != kbd_head) {
-            c = kbd_buffer[kbd_tail];
-            kbd_tail = (kbd_tail + 1) % 256;
-        }
-        __asm__ volatile("sti");
+        // Fresh, empty fields for this attempt (username active); wipe any
+        // "invalid credentials" line left by a previous failure.
+        draw_field(ux, uy, uw, 1, NULL, 0);
+        draw_field(pfx, pfy, pfw, 0, NULL, 1);
+        fb_fill_rect(px + 20, py + 176, 320, 18, fb_rgb(30, 24, 46));
 
-        if (c) {
-            if (c == '\n' || c == '\r') {
-                if (field == 0) {
-                    field = 1;
-                    draw_field(ux, uy, uw, 0, user, 0);
-                    draw_field(pfx, pfy, pfw, 1, pass, 1);
-                } else {
-                    goto submit;
-                }
-            } else if ((c == '\b' || c == 0x7F) && (field == 0 ? user_pos : pass_pos) > 0) {
-                if (field == 0) user[--user_pos] = '\0';
-                else pass[--pass_pos] = '\0';
-                draw_field(ux, uy, uw, field == 0, user, 0);
-                draw_field(pfx, pfy, pfw, field == 1, pass, 1);
-            } else if (c >= 32 && c < 127) {
-                if (field == 0 && user_pos < 31) {
-                    user[user_pos++] = c; user[user_pos] = '\0';
-                    draw_field(ux, uy, uw, 1, user, 0);
-                } else if (field == 1 && pass_pos < 63) {
-                    pass[pass_pos++] = c; pass[pass_pos] = '\0';
-                    draw_field(pfx, pfy, pfw, 1, pass, 1);
-                }
+        serial_puts("[LOGIN] Ready.\n");
+
+        int submitted = 0;
+        while (!submitted) {
+            __asm__ volatile("cli");
+            char c = 0;
+            if (kbd_tail != kbd_head) {
+                c = kbd_buffer[kbd_tail];
+                kbd_tail = (kbd_tail + 1) % 256;
             }
-        } else {
-            for (volatile int i = 0; i < 10000; i++);
-        }
-    }
+            __asm__ volatile("sti");
 
-submit:
-    serial_puts("[LOGIN] Verifying...\n");
-    int ok = auth_verify(user, pass);
-    serial_puts(ok ? "[LOGIN] OK.\n" : "[LOGIN] FAIL.\n");
-    if (!ok) {
-        font_draw_string((fw-18*8)/2, py+180, "Invalid credentials", fb_rgb(220,60,60), fb_rgb(30,24,46));
-        for (volatile int i = 0; i < 30000000; i++);
-        return 0;
+            if (c) {
+                if (c == '\n' || c == '\r') {
+                    if (field == 0) {
+                        field = 1;
+                        draw_field(ux, uy, uw, 0, user, 0);
+                        draw_field(pfx, pfy, pfw, 1, pass, 1);
+                    } else {
+                        submitted = 1;
+                    }
+                } else if ((c == '\b' || c == 0x7F) && (field == 0 ? user_pos : pass_pos) > 0) {
+                    if (field == 0) user[--user_pos] = '\0';
+                    else pass[--pass_pos] = '\0';
+                    draw_field(ux, uy, uw, field == 0, user, 0);
+                    draw_field(pfx, pfy, pfw, field == 1, pass, 1);
+                } else if (c >= 32 && c < 127) {
+                    if (field == 0 && user_pos < 31) {
+                        user[user_pos++] = c; user[user_pos] = '\0';
+                        draw_field(ux, uy, uw, 1, user, 0);
+                    } else if (field == 1 && pass_pos < 63) {
+                        pass[pass_pos++] = c; pass[pass_pos] = '\0';
+                        draw_field(pfx, pfy, pfw, 1, pass, 1);
+                    }
+                }
+            } else {
+                for (volatile int i = 0; i < 10000; i++);
+            }
+        }
+
+        serial_puts("[LOGIN] Verifying...\n");
+        if (auth_verify(user, pass)) {
+            serial_puts("[LOGIN] OK.\n");
+            return 1;
+        }
+
+        attempts++;
+        serial_puts("[LOGIN] FAIL.\n");
+
+        // Brute-force defence: lock out after LOGIN_MAX_ATTEMPTS failures (the
+        // caller then reboots), and throttle between tries with a delay that
+        // grows each time so scripted guessing is slow.
+        if (attempts >= LOGIN_MAX_ATTEMPTS) {
+            font_draw_string((fw - 26 * 8) / 2, py + 180,
+                             "Too many attempts - locked", fb_rgb(230, 70, 70), fb_rgb(30, 24, 46));
+            serial_puts("[LOGIN] LOCKED.\n");
+            for (volatile long i = 0; i < 60000000L; i++);
+            return 0;
+        }
+        char msg[40];
+        snprintf(msg, sizeof(msg), "Invalid credentials (%d/%d)", attempts, LOGIN_MAX_ATTEMPTS);
+        font_draw_string((fw - (int)strlen(msg) * 8) / 2, py + 180, msg,
+                         fb_rgb(230, 70, 70), fb_rgb(30, 24, 46));
+        for (volatile long i = 0; i < 25000000L * attempts; i++);   // graduated throttle
     }
-    return 1;
 }
