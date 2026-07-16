@@ -11,5 +11,6 @@ int  auth_verify(const char* username, const char* password);
 void auth_add_user(const char* username, const char* password, int avatar);
 void auth_list_users(void);
 int  auth_get_avatar(const char* username);
+void auth_set_avatar(const char* username, int avatar);
 
 #endif

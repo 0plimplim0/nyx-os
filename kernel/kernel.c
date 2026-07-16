@@ -1948,15 +1948,8 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
         bootsplash_clear();
         printf("[AUTH] Setting up user accounts...\n");
         auth_setup();
-        printf("[LOGIN] Starting login screen...\n");
-        if (!login_screen()) {
-            printf("[LOGIN] Login failed, rebooting...\n");
-            outb(0x64, 0xFE);
-            while(1) { __asm__ volatile("hlt"); }
-        }
-        printf("[LOGIN] Login successful, starting desktop...\n");
-        printf("[DESKTOP] Launching NyxOS Desktop...\n");
-        // Register compositor as scheduler process so scheduler manages it correctly
+        // Register the compositor as a scheduler process once; the boot thread runs
+        // its loop directly (compositor_run below).
         process_t* comp_proc = create_process("compositor", compositor_run, 0);
         if (comp_proc) {
             comp_proc->sched_weight = SCHED_WEIGHT_GUI;   // GUI gets priority over jobs
@@ -1964,9 +1957,22 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
                 if (process_table[i] == comp_proc) { current_idx = i; break; }
             }
         }
-        compositor_init();
-        serial_puts("[COMP] calling compositor_run\n");
-        compositor_run();
+        // Login -> desktop, looping on logout: the user-badge menu's "Log out" makes
+        // compositor_run() return with compositor_logout_requested set, so we tear the
+        // desktop down (compositor_init frees its windows) and re-show the login — no
+        // reboot. Any other exit (Shutdown) leaves the loop and reboots.
+        for (;;) {
+            fb_use_lfb_direct();          // login draws straight to the LFB (no back buffer)
+            printf("[LOGIN] Starting login screen...\n");
+            login_screen();               // blocks until a successful login
+            printf("[LOGIN] Login successful, starting desktop...\n");
+            compositor_init();
+            serial_puts("[COMP] calling compositor_run\n");
+            compositor_run();
+            if (!compositor_logout_requested) break;
+            compositor_logout_requested = 0;
+            printf("[LOGIN] Logout — returning to the login screen.\n");
+        }
         printf("[DESKTOP] Compositor exited, rebooting...\n");
         outb(0x64, 0xFE);
     } else {

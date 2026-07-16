@@ -82,5 +82,6 @@ void compositor_run(void);
 void compositor_quit(void);
 int compositor_is_running(void);
 window_t* compositor_open_editor(const char* path);  // open Text Editor, optionally with a file
+extern int compositor_logout_requested;              // user menu "Log out" -> boot loop re-shows login
 
 #endif

@@ -12,6 +12,7 @@
 #include "wallpaper_win.h"
 #include "rtc.h"
 #include "login.h"
+#include "auth.h"
 
 static window_t* windows[MAX_WINDOWS];
 static int window_count = 0;
@@ -27,6 +28,8 @@ static uint32_t taskbar_bg, taskbar_fg, taskbar_hl;
 static uint32_t desktop_bg, title_active, title_inactive;
 
 static int start_menu_open = 0;
+static int user_menu_open = 0;      // the taskbar user badge's popup menu
+int compositor_logout_requested = 0; // set by the user menu; boot loop re-shows login
 static int ctx_menu_open = 0;
 static int ctx_menu_x = 0, ctx_menu_y = 0;
 static int mouse_x = 0, mouse_y = 0;
@@ -340,6 +343,79 @@ static void draw_start_menu(void) {
     }
 }
 
+// ---- Taskbar user-badge popup menu (change profile picture / log out) ----
+#define USERMENU_W   150
+#define USERMENU_ITH 26
+#define USERMENU_HDR 24
+#define USERMENU_N   2
+static const char* usermenu_items[] = { "Change picture", "Log out" };
+
+static void user_menu_rect(int* rx, int* ry, int* rh) {
+    uint32_t fw = fb_get_width(), fh = fb_get_height();
+    int h = USERMENU_HDR + USERMENU_N * USERMENU_ITH + 2;
+    int x = (int)(fw - CLOCK_W - 8) - USERMENU_W;
+    if (x < 2) x = 2;
+    *rx = x; *ry = (int)(fh - TASKBAR_H) - h; if (rh) *rh = h;
+}
+
+static void draw_user_menu(void) {
+    if (!user_menu_open) return;
+    int x, y, h; user_menu_rect(&x, &y, &h);
+    fb_fill_rect(x, y, USERMENU_W, h, fb_rgb(45,45,50));
+    fb_fill_rect(x, y, USERMENU_W, 1, fb_rgb(100,100,100));
+    fb_fill_rect(x, y + h - 1, USERMENU_W, 1, fb_rgb(100,100,100));
+    fb_fill_rect(x, y, 1, h, fb_rgb(100,100,100));
+    fb_fill_rect(x + USERMENU_W - 1, y, 1, h, fb_rgb(100,100,100));
+    // header: the logged-in user's avatar + name
+    fb_fill_rect(x, y, USERMENU_W, USERMENU_HDR, fb_rgb(60,60,90));
+    draw_avatar(x + 5, y + 3, USERMENU_HDR - 6, g_login_avatar, 0);
+    font_draw_string(x + USERMENU_HDR + 6, y + (USERMENU_HDR - FONT_HEIGHT) / 2,
+                     g_login_user, fb_rgb(255,255,255), fb_rgb(60,60,90));
+    for (int i = 0; i < USERMENU_N; i++) {
+        int iy = y + USERMENU_HDR + i * USERMENU_ITH;
+        fb_fill_rect(x + 3, iy, USERMENU_W - 6, USERMENU_ITH - 1, fb_rgb(45,45,50));
+        font_draw_string(x + 12, iy + (USERMENU_ITH - FONT_HEIGHT) / 2,
+                         usermenu_items[i], fb_rgb(220,220,220), fb_rgb(45,45,50));
+    }
+}
+
+// The taskbar user badge (avatar + name, left of the clock) is clickable; this
+// mirrors the geometry draw_taskbar uses for it.
+static int badge_hit(int mx, int my) {
+    uint32_t fw = fb_get_width(), fh = fb_get_height();
+    int tb_y = (int)fh - TASKBAR_H;
+    int av_s = TASKBAR_H - 14;
+    int ublock_w = av_s + 6 + (int)strlen(g_login_user) * FONT_WIDTH + 10;
+    int ubx = (int)(fw - CLOCK_W - 8) - ublock_w + 4;
+    return my >= tb_y && mx >= ubx - 4 && mx < (int)(fw - CLOCK_W - 8);
+}
+
+static int user_menu_item_hit(int mx, int my, int* idx) {
+    if (!user_menu_open) return 0;
+    int x, y; user_menu_rect(&x, &y, 0);
+    for (int i = 0; i < USERMENU_N; i++) {
+        int iy = y + USERMENU_HDR + i * USERMENU_ITH;
+        if (mx >= x && mx < x + USERMENU_W && my >= iy && my < iy + USERMENU_ITH) { *idx = i; return 1; }
+    }
+    return 0;
+}
+
+static int user_menu_area_hit(int mx, int my) {
+    if (!user_menu_open) return 0;
+    int x, y, h; user_menu_rect(&x, &y, &h);
+    return mx >= x && mx < x + USERMENU_W && my >= y && my < y + h;
+}
+
+static void do_user_menu_action(int idx) {
+    if (idx == 0) {            // Change picture: cycle to the next avatar + persist
+        g_login_avatar = (g_login_avatar + 1) % AVATAR_COUNT;
+        auth_set_avatar(g_login_user, g_login_avatar);
+    } else if (idx == 1) {     // Log out: unwind to the login screen (handled in the boot loop)
+        compositor_logout_requested = 1;
+        quit = 1;
+    }
+}
+
 #define CTX_MENU_W 160
 #define CTX_MENU_H 124
 #define CTX_MENU_N 5
@@ -522,6 +598,7 @@ static void redraw_all(void) {
     draw_workspace_indicator();
     draw_taskbar();
     draw_start_menu();
+    draw_user_menu();
     draw_ctx_menu();
     frame_dirty = 1;      // a fresh frame is in the back buffer, awaiting fb_present()
 }
@@ -672,9 +749,17 @@ static void do_start_menu_action(int idx) {
 }
 
 void compositor_init(void) {
-    for (int i = 0; i < MAX_WINDOWS; i++) windows[i] = NULL;
+    // Free any windows from a previous session (so logout -> re-login starts with a
+    // clean desktop instead of leaking the old user's windows + their contexts).
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i]) {
+            if (windows[i]->reserved) kfree(windows[i]->reserved);
+            kfree(windows[i]);
+            windows[i] = NULL;
+        }
+    }
     window_count = 0; next_id = 100; focused_id = 0; drag_id = 0; resize_id = 0; quit = 0;
-    current_workspace = 0; start_menu_open = 0; cursor_saved = 0;
+    current_workspace = 0; start_menu_open = 0; user_menu_open = 0; cursor_saved = 0;
 
     taskbar_bg = fb_rgb(40,45,55);
     taskbar_fg = fb_rgb(220,220,220);
@@ -1302,6 +1387,26 @@ void compositor_run(void) {
                     } else {
                         ctx_menu_open = 0;
                     }
+                }
+
+                if (user_menu_open) {
+                    int idx;
+                    if (user_menu_item_hit(mx, my, &idx)) {
+                        do_user_menu_action(idx);
+                        user_menu_open = 0;
+                        redraw = 1;
+                    } else if (!user_menu_area_hit(mx, my)) {
+                        user_menu_open = 0;
+                        redraw = 1;
+                    }
+                    goto done_click;
+                }
+
+                if (badge_hit(mx, my)) {
+                    user_menu_open = !user_menu_open;
+                    start_menu_open = 0;
+                    redraw = 1;
+                    goto done_click;
                 }
 
                 if (start_menu_open) {

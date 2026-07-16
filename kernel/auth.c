@@ -399,3 +399,49 @@ int auth_get_avatar(const char* username) {
     }
     return 0;
 }
+
+// Change the stored profile picture for `username` (used by the desktop user
+// menu). Rewrites only the avatar field of that user's /etc/passwd entry, keeping
+// the salt + hash; updates the in-memory fallback table when there's no disk.
+void auth_set_avatar(const char* username, int avatar) {
+    if (!username) return;
+    if (avatar < 0 || avatar >= AVATAR_COUNT) avatar = 0;
+
+    if (ext2_fs.block_size == 0 || !passwd_exists()) {
+        for (int i = 0; i < fb_count; i++)
+            if (strcmp(fb_users[i].username, username) == 0) fb_users[i].avatar = avatar;
+        return;
+    }
+
+    char buf[3072];
+    int len = read_passwd(buf, sizeof(buf) - 1);
+    if (len < 0) return;
+    buf[len] = '\0';
+
+    char out[3200];
+    int oi = 0, ulen = strlen(username), start = 0;
+    for (int i = 0; i <= len; i++) {
+        if (buf[i] == '\n' || buf[i] == '\0') {
+            if (i > start) {
+                int is_user = (i - start > ulen &&
+                               strncmp(buf + start, username, ulen) == 0 &&
+                               buf[start + ulen] == ':');
+                if (is_user) {
+                    // Copy the first 4 fields (up to and incl. the 4th ':'), then
+                    // write the new avatar digit, dropping any old 5th field.
+                    int col = 0, j = start;
+                    while (j < i && col < 4) { if (buf[j] == ':') col++; j++; }
+                    for (int k = start; k < j && oi < (int)sizeof(out) - 8; k++) out[oi++] = buf[k];
+                    if (col < 4 && oi < (int)sizeof(out) - 8) out[oi++] = ':';   // old 4-field entry
+                    if (oi < (int)sizeof(out) - 2) out[oi++] = (char)('0' + avatar);  // avatar < 10
+                } else {
+                    for (int k = start; k < i && oi < (int)sizeof(out) - 2; k++) out[oi++] = buf[k];
+                }
+                if (oi < (int)sizeof(out) - 1) out[oi++] = '\n';
+            }
+            start = i + 1;
+        }
+    }
+    out[oi] = '\0';
+    write_passwd(out, oi);
+}
