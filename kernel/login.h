@@ -11,5 +11,7 @@ const char* avatar_name(int id);
 // default). The taskbar shows this name + avatar as the "current user".
 extern char g_login_user[32];
 extern int  g_login_avatar;
+extern char g_login_home[64];       // this session's home dir (/home/<user>)
+void* login_home_node(void);        // home dir node (or root) for a new Terminal's CWD
 
 #endif

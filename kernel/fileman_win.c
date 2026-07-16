@@ -2,6 +2,7 @@
 #include "compositor.h"
 #include "fileman_win.h"
 #include "font.h"
+#include "login.h"
 
 #define TOOLBAR_H 28
 #define BTN_SPACE 6
@@ -14,7 +15,8 @@ fileman_win_t* fileman_create_ctx(void) {
     fileman_win_t* fm = (fileman_win_t*)kmalloc(sizeof(fileman_win_t));
     if (!fm) return NULL;
     memset_asm(fm, 0, sizeof(fileman_win_t));
-    strncpy(fm->cwd, "/", sizeof(fm->cwd));
+    strncpy(fm->cwd, g_login_home[0] ? g_login_home : "/", sizeof(fm->cwd));
+    fm->cwd[sizeof(fm->cwd) - 1] = '\0';
     fm->sel_index = -1;
     fm->input_mode = 0;
     fm->input_cursor_tick = get_ticks();

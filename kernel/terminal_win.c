@@ -2,6 +2,7 @@
 #include "compositor.h"
 #include "terminal_win.h"
 #include "font.h"
+#include "login.h"
 
 static void term_add_line(terminal_win_t* term, const char* text, uint8_t color) {
     if (term->line_count >= TERM_LINES) {
@@ -97,7 +98,7 @@ terminal_win_t* terminal_create_ctx(void) {
     terminal_win_t* term = (terminal_win_t*)kmalloc(sizeof(terminal_win_t));
     if (!term) return NULL;
     memset_asm(term, 0, sizeof(terminal_win_t));
-    term->cwd = vfs_root_node();          // each terminal starts at /
+    term->cwd = login_home_node();        // each terminal starts in the user's home dir
     term_set_prompt(term);
     term->visible_rows = 20;
     term_add_line(term, "NyxOS Terminal v0.2.0", VGA_LIGHT_GREEN | (VGA_BLACK << 4));

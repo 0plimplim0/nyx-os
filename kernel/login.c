@@ -11,6 +11,25 @@
 // taskbar to show "who am I" with a profile picture.
 char g_login_user[32] = "nyx";
 int  g_login_avatar = 0;
+char g_login_home[64] = "/";     // this session's home directory (/home/<user>)
+
+// Ensure /home/<user> exists and record it as this session's home directory, so
+// new Terminal and File Manager windows start there instead of at /.
+static void setup_user_home(void) {
+    vfs_mkdir("/home", 0755);                 // idempotent (fails harmlessly if present)
+    char path[64];
+    snprintf(path, sizeof(path), "/home/%s", g_login_user);
+    vfs_mkdir(path, 0755);
+    strncpy(g_login_home, path, sizeof(g_login_home) - 1);
+    g_login_home[sizeof(g_login_home) - 1] = '\0';
+}
+
+// The current session's home directory node (or the root as a fallback), used as
+// the initial working directory for new Terminal windows.
+void* login_home_node(void) {
+    void* n = g_login_home[0] ? vfs_path_node(g_login_home) : 0;
+    return n ? n : vfs_root_node();
+}
 
 // The login background is a vertical gradient. Sampling its color at a given row
 // lets the moon logo blend in seamlessly.
@@ -247,6 +266,7 @@ int login_screen(void) {
                 strncpy(g_login_user, user, sizeof(g_login_user) - 1);
                 g_login_user[sizeof(g_login_user) - 1] = '\0';
                 g_login_avatar = avatar;
+                setup_user_home();
                 serial_puts("[LOGIN] OK.\n");
                 return 1;
             }
@@ -259,6 +279,7 @@ int login_screen(void) {
             strncpy(g_login_user, user, sizeof(g_login_user) - 1);
             g_login_user[sizeof(g_login_user) - 1] = '\0';
             g_login_avatar = auth_get_avatar(user);
+            setup_user_home();
             serial_puts("[LOGIN] OK.\n");
             return 1;
         }

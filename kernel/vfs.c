@@ -805,6 +805,14 @@ void* vfs_getcwd_node(void)  { return current_dir; }
 void  vfs_setcwd_node(void* n) { if (n) current_dir = (vfs_node_t*)n; }
 void* vfs_root_node(void)    { return &nodes[0]; }
 
+// Resolve `path` to its directory node (opaque handle, like vfs_root_node), or
+// NULL if it doesn't exist or isn't a directory. Lets a new Terminal start in the
+// logged-in user's home directory.
+void* vfs_path_node(const char* path) {
+    vfs_node_t* n = resolve_path(path);
+    return (n && n->type == 1) ? n : NULL;
+}
+
 int vfs_chdir(const char* path) {
     mount_entry_t* me = vfs_find_mount(path);
     if (me) {
