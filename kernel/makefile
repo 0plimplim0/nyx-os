@@ -78,7 +78,8 @@ USER_ELFS = $(USER_DIR)/hello.elf $(USER_DIR)/init.elf $(USER_DIR)/spin.elf $(US
             $(USER_DIR)/pstorm.elf $(USER_DIR)/bigread.elf $(USER_DIR)/segv.elf \
             $(USER_DIR)/sockdemo.elf $(USER_DIR)/srvdemo.elf $(USER_DIR)/udpdemo.elf \
             $(USER_DIR)/nc.elf $(USER_DIR)/sigrec.elf $(USER_DIR)/alarmdemo.elf \
-            $(USER_DIR)/polldemo.elf $(USER_DIR)/wget.elf $(USER_DIR)/netstorm.elf $(USER_DIR)/stat.elf
+            $(USER_DIR)/polldemo.elf $(USER_DIR)/wget.elf $(USER_DIR)/netstorm.elf $(USER_DIR)/stat.elf \
+            $(USER_DIR)/vfsfill.elf
 
 # Flags for Nyx C output (GCC: statement-exprs, __auto_type). -mno-red-zone is mandatory.
 NYXCFLAGS = -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR)
@@ -157,6 +158,12 @@ $(USER_DIR)/netstorm.o: $(USER_DIR)/netstorm.c $(USER_DIR)/libc.h $(USER_DIR)/sy
 $(USER_DIR)/stat.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/stat.o
 	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/stat.o
 $(USER_DIR)/stat.o: $(USER_DIR)/stat.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
+	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
+
+# vfsfill — VFS directory-child-cap hardening test (v5.8.81)
+$(USER_DIR)/vfsfill.elf: $(USER_DIR)/crt0.o $(USER_DIR)/libc.so $(USER_DIR)/vfsfill.o
+	$(LD) -nostdlib -m elf_x86_64 -e _start -Ttext 0x10000 -o $@ $(USER_DIR)/crt0.o --just-symbols=$(USER_DIR)/libc.so $(USER_DIR)/vfsfill.o
+$(USER_DIR)/vfsfill.o: $(USER_DIR)/vfsfill.c $(USER_DIR)/libc.h $(USER_DIR)/syscall.h
 	$(CC) -std=gnu99 -Os -ffreestanding -nostdlib -m64 -mno-red-zone -I$(USER_DIR) -c $< -o $@
 
 # sigrec — multi-fault recovery demo (sigsetjmp/siglongjmp catch repeated SIGSEGV).

@@ -1,9 +1,9 @@
 #include "kernel.h"
 #include "ext2.h"
 
-#define MAX_INODES    128
+#define MAX_INODES    256   // total node pool (was 128 — root alone holds ~58)
 #define MAX_NAME      64
-#define MAX_CHILDREN  64
+#define MAX_CHILDREN  128   // per-directory child cap (was 64 — root `/` needs headroom)
 #define BLOCK_SIZE    512
 
 // Mount table
@@ -94,6 +94,18 @@ static void free_node(vfs_node_t* n) {
     if (n && free_node_count < MAX_INODES)
         free_nodes[free_node_count++] = n;
     preempt_enable();
+}
+
+// Append `child` to directory `parent`; returns 0, or -1 if `parent` already holds
+// MAX_CHILDREN entries. EVERY insert into a node's fixed children[] array must go
+// through here (or an equivalent `child_count >= MAX_CHILDREN` guard) — a raw
+// `children[child_count++] = x` with no bound check writes past the array and
+// corrupts the adjacent inode in the nodes[] pool. Callers that alloc_node()'d the
+// child first should free_node() it on failure.
+static int vfs_append_child(vfs_node_t* parent, vfs_node_t* child) {
+    if (!parent || parent->child_count >= MAX_CHILDREN) return -1;
+    parent->children[parent->child_count++] = child;
+    return 0;
 }
 
 static vfs_node_t* find_child(vfs_node_t* dir, const char* name) {
@@ -443,7 +455,7 @@ int vfs_open(const char* path, int flags, mode_t mode) {
             strncpy(ino->name, child_name, MAX_NAME-1);
             ino->type = 0;
             ino->parent = parent;
-            parent->children[parent->child_count++] = ino;
+            if (vfs_append_child(parent, ino) != 0) { free_node(ino); return -1; }
         }
         if (flags & 2) {                 // O_TRUNC — reset an existing file to empty
             if (ino->data) { kfree(ino->data); ino->data = 0; }
@@ -595,7 +607,7 @@ int vfs_create_from_mem(const char* path, uint8_t* data, uint32_t size) {
     ino->size = size;
     ino->data = data;
     ino->parent = parent;
-    parent->children[parent->child_count++] = ino;
+    if (vfs_append_child(parent, ino) != 0) { free_node(ino); return -1; }
     return (int)(uintptr_t)ino;
 }
 
@@ -628,7 +640,7 @@ int vfs_mkdir(const char* path, mode_t mode) {
     strncpy(dir->name, child_name, MAX_NAME-1);
     dir->type = 1;
     dir->parent = parent;
-    parent->children[parent->child_count++] = dir;
+    if (vfs_append_child(parent, dir) != 0) { free_node(dir); return -1; }
     return 0;
 }
 
@@ -679,6 +691,10 @@ void vfs_rename(const char* old, const char* new) {
     if (!new_parent) { strncpy(ino->name, new, MAX_NAME-1); return; }
     strncpy(ino->name, new_name, MAX_NAME-1);
     if (new_parent != parent) {
+        // Append to the destination FIRST — if it's at MAX_CHILDREN, abort the move
+        // and leave `ino` in its original parent rather than orphaning it (or writing
+        // past the destination's children[]).
+        if (vfs_append_child(new_parent, ino) != 0) return;
         for (uint32_t i = 0; i < parent->child_count; i++) {
             if (parent->children[i] == ino) {
                 for (uint32_t j = i; j < parent->child_count - 1; j++)
@@ -687,7 +703,6 @@ void vfs_rename(const char* old, const char* new) {
                 break;
             }
         }
-        new_parent->children[new_parent->child_count++] = ino;
         ino->parent = new_parent;
     }
 }
@@ -852,7 +867,7 @@ int vfs_chdir(const char* path) {
             strncpy(dir->name, child_name, MAX_NAME - 1);
             dir->type = 1;
             dir->parent = parent;
-            parent->children[parent->child_count++] = dir;
+            if (vfs_append_child(parent, dir) != 0) { free_node(dir); return -1; }
         }
         current_dir = dir;
         return 0;
@@ -953,7 +968,7 @@ int vfs_touch(const char* path) {
     strncpy(ino->name, child_name, MAX_NAME-1);
     ino->type = 0;
     ino->parent = parent;
-    parent->children[parent->child_count++] = ino;
+    if (vfs_append_child(parent, ino) != 0) { free_node(ino); return -1; }
     return 0;
 }
 
@@ -976,7 +991,7 @@ int vfs_write_file(const char* path, const void* buf, uint32_t len) {
         strncpy(ino->name, child_name, MAX_NAME - 1);
         ino->type = 0;
         ino->parent = parent;
-        parent->children[parent->child_count++] = ino;
+        if (vfs_append_child(parent, ino) != 0) { free_node(ino); return -1; }
     }
     if (ino->type != 0) return -1;
     if (ino->data) kfree(ino->data);
@@ -1042,8 +1057,12 @@ int vfs_cp(const char* src, const char* dst) {
                     if (dst_ino->data) memcpy(dst_ino->data, sbuf, ssize);
                     else dst_ino->size = 0;
                 }
-                dst_parent->children[dst_parent->child_count++] = dst_ino;
-                rc = 0;
+                if (vfs_append_child(dst_parent, dst_ino) == 0) {
+                    rc = 0;
+                } else {
+                    if (dst_ino->data) kfree(dst_ino->data);
+                    free_node(dst_ino);
+                }
             }
         }
     }

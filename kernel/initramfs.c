@@ -57,8 +57,12 @@ void initramfs_boot(void) {
         if (filesize > 0) {
             char path[MAX_PATH];
             snprintf(path, sizeof(path), "/%s", name);
-            vfs_create_from_mem(path, initramfs_data_ptr + data_offset, filesize);
-            file_count++;
+            // Surface a full VFS instead of silently dropping the file: file_count
+            // now reflects what actually loaded, and an overflow is loud.
+            if (vfs_create_from_mem(path, initramfs_data_ptr + data_offset, filesize) < 0)
+                printf("[INITRAMFS] WARNING: could not load /%s (VFS pool/dir full)\n", name);
+            else
+                file_count++;
         }
 
         uint32_t data_padded = align4(filesize);
