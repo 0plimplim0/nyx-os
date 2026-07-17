@@ -33,41 +33,82 @@ void page_pin(void* addr) {
     if (page_idx < MAX_PAGES) page_pinned[page_idx] = 1;
 }
 
-void init_memory(uint64_t mem_size) {
+// Reserve pages [0, end_page): mark each used (clear its bitmap bit) and drop free_pages
+// for every one that was free. Carves the kernel image + low 1MB out of the freed RAM.
+static void reserve_low_pages(uint32_t end_page) {
+    for (uint32_t i = 0; i < end_page && i < total_pages; i++) {
+        if (page_bitmap[i / 32] & (1u << (i % 32))) {   // currently free -> reserve it
+            page_bitmap[i / 32] &= ~(1u << (i % 32));
+            free_pages--;
+        }
+    }
+}
+
+// Initialize the physical page allocator. When the bootloader provides a firmware
+// memory map (multiboot2 type-6 tag, parsed in kernel_main), we mark EVERY page used
+// and then free ONLY the ranges the firmware reports as available RAM (type 1) — so
+// every hole (the low VGA/BIOS window 0xA0000-0xFFFFF, the block SeaBIOS relocates
+// itself into near the top of RAM, ACPI tables, PCI MMIO) is reserved automatically,
+// regardless of RAM size or where the holes sit. alloc_page can then never hand out a
+// non-RAM frame — the root fix for the "pipeline corruption" Heisenbug, generalized:
+// v5.8.83 reserved a hardcoded [0,_kernel_end), which covered the LOW firmware hole
+// but not reserved regions ABOVE the kernel (safe only because pstorm never allocated
+// that high). With no memory map we fall back to that v5.8.83 behavior.
+void init_memory(uint64_t mem_size, const mb_mmap_entry_t* mmap, int mmap_count) {
     memory_total = mem_size;
     memory_used = 0;
-    memset_asm(page_bitmap, 0xFF, sizeof(page_bitmap));
 
+    extern uint8_t _kernel_end[];
+    uint32_t kernel_end_page = (uint32_t)(((uintptr_t)_kernel_end + PAGE_SIZE - 1) / PAGE_SIZE);
+
+    if (mmap && mmap_count > 0) {
+        memset_asm(page_bitmap, 0x00, sizeof(page_bitmap));   // all pages USED
+        free_pages = 0;
+
+        // Size the pool to the top of available RAM.
+        uint64_t top = 0;
+        for (int r = 0; r < mmap_count; r++)
+            if (mmap[r].type == 1 && mmap[r].base + mmap[r].len > top)
+                top = mmap[r].base + mmap[r].len;
+        total_pages = (uint32_t)(top / PAGE_SIZE);
+        if (total_pages > MAX_PAGES) total_pages = MAX_PAGES;
+
+        // Free every whole page inside an AVAILABLE (type 1) region.
+        for (int r = 0; r < mmap_count; r++) {
+            if (mmap[r].type != 1) continue;
+            uint64_t start = (mmap[r].base + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);  // round up
+            uint64_t end   = (mmap[r].base + mmap[r].len)   & ~(uint64_t)(PAGE_SIZE - 1);  // round down
+            for (uint64_t a = start; a < end; a += PAGE_SIZE) {
+                uint32_t p = (uint32_t)(a / PAGE_SIZE);
+                if (p >= total_pages) break;
+                if (!(page_bitmap[p / 32] & (1u << (p % 32)))) {  // used -> free
+                    page_bitmap[p / 32] |= (1u << (p % 32));
+                    free_pages++;
+                }
+            }
+        }
+        // The firmware map lists RAM the kernel itself occupies as available (GRUB loaded
+        // us into it), so carve it back out: page 0 (NULL guard), the whole low 1MB
+        // (real-mode IVT/BDA + the SMP trampoline at 0x8000, copied in later by smp_init),
+        // and the kernel image/BSS through _kernel_end. Reserve [0, max(1MB, _kernel_end)).
+        uint32_t low_1mb = 0x100000 / PAGE_SIZE;
+        reserve_low_pages(kernel_end_page > low_1mb ? kernel_end_page : low_1mb);
+
+        printf("[MEM] mmap %d regions: %u pages free (%u MB usable), RAM top %u MB\n",
+               mmap_count, free_pages, free_pages / 256, (unsigned)(top / (1024 * 1024)));
+        return;
+    }
+
+    // Fallback: no firmware memory map. Reserve [0, _kernel_end) — including the whole
+    // sub-1MB firmware hole (VGA MMIO + BIOS ROM) — and treat the rest up to mem_size as
+    // usable. This is the v5.8.83 behavior; it can't see reserved regions above the
+    // kernel, so it is only the safety net for a boot without a type-6 tag.
+    memset_asm(page_bitmap, 0xFF, sizeof(page_bitmap));
     total_pages = mem_size / PAGE_SIZE;
     if (total_pages > MAX_PAGES) total_pages = MAX_PAGES;
     free_pages = total_pages;
-
-    // Reserve the ENTIRE low region below the kernel — [0, _kernel_end) — not just
-    // page 0 and the kernel image. The legacy sub-1MB area is NOT usable RAM: it holds
-    // the real-mode IVT/BIOS data area, the 0xA0000-0xBFFFF VGA framebuffer window
-    // (MMIO), and the 0xC0000-0xFFFFF video/system BIOS ROMs. QEMU/SeaBIOS shadow the
-    // video BIOS into 0xC0000-0xC7FFF as write-protected ROM. We do NOT parse the
-    // multiboot RAM map, so the old code (which reserved only page 0 + [0x100000,end))
-    // left pages 0x1000-0xFFFFF "free": alloc_page scans low->high, so under memory
-    // pressure it handed out these ROM/MMIO frames — writes are dropped, reads return
-    // firmware bytes — and the allocator wrote live kernel structures (heap/slab
-    // metadata, page tables, user pages) onto ROM, reading back BIOS garbage. That is
-    // the long-standing "pipeline corruption" Heisenbug: stress-dependent (the low RAM
-    // pool must be exhausted to reach the 0xA0000+ hole) and manifestation-varying
-    // (heap_free #GP, page-table MAPCORRUPT, or user SIGSEGV depending on the frame's
-    // use). The kernel loads at 1MB and never allocates sub-1MB RAM (the SMP trampoline
-    // at 0x8000 is a direct copy, not alloc_page), so forgoing the ~640KB of usable
-    // conventional RAM below 1MB is a negligible, safe loss.
-    extern uint8_t _kernel_end[];
-    uintptr_t kernel_end = (uintptr_t)_kernel_end;
-    uint32_t kernel_end_page = (uint32_t)((kernel_end + PAGE_SIZE - 1) / PAGE_SIZE);
-    for (uint32_t i = 0; i < kernel_end_page && i < total_pages; i++) {
-        page_bitmap[i / 32] &= ~(1 << (i % 32));
-        free_pages--;
-    }
-
-    printf("[MEM] Bitmap at %p, %d pages free (%d KB)\n",
-        (void*)page_bitmap, free_pages, free_pages * 4);
+    reserve_low_pages(kernel_end_page);
+    printf("[MEM] no mmap: %d pages free (%d KB)\n", free_pages, free_pages * 4);
 }
 
 void* alloc_page(void) {

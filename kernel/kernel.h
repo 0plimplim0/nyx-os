@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.83"
+#define KERNEL_VERSION "5.8.84"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -748,7 +748,13 @@ void irq_unmask(int irq);
 void irq_mask(int irq);
 void irq_eoi(uint64_t int_no);
 
-void init_memory(uint64_t mem_size);
+// One firmware physical-memory-map region (from the multiboot2 type-6 tag). `type`
+// mirrors the E820/multiboot classes: 1 = available RAM; anything else (2 reserved,
+// 3 ACPI-reclaimable, 4 ACPI-NVS, 5 bad) is NOT usable and must stay out of the
+// physical allocator. init_memory frees ONLY type-1 pages, so every hole (the low
+// VGA/BIOS window, the high SeaBIOS/ACPI regions, PCI MMIO) is reserved automatically.
+typedef struct { uint64_t base; uint64_t len; uint32_t type; } mb_mmap_entry_t;
+void init_memory(uint64_t mem_size, const mb_mmap_entry_t* mmap, int mmap_count);
 void* kmalloc(size_t size);
 void* kmalloc_aligned(size_t size, uint32_t align);
 void kfree(void* ptr);

@@ -1817,6 +1817,12 @@ void kernel_panic(const char* msg, ...) {
 // ============================================================
 static void* saved_mboot_ptr = NULL;
 
+// Firmware physical-memory map, parsed from the multiboot2 type-6 tag and handed to
+// init_memory so the allocator frees ONLY available RAM (every reserved hole stays out).
+#define MAX_MMAP 64
+static mb_mmap_entry_t g_mmap[MAX_MMAP];
+static int g_mmap_count = 0;
+
 void kernel_main(uint64_t magic, void* mboot_ptr) {
     (void)magic;
     saved_mboot_ptr = mboot_ptr;
@@ -1848,6 +1854,20 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
                     uint32_t mem_lower = *(uint32_t*)(tag + 8);
                     uint32_t mem_upper = *(uint32_t*)(tag + 12);
                     mem_total = (uint64_t)(mem_lower + mem_upper) * 1024;
+                } else if (type == 6) {
+                    // Memory map tag: u32 entry_size, u32 entry_version, then entries of
+                    // { u64 base, u64 length, u32 type, u32 reserved }. Copy them out for
+                    // init_memory (base+len at e+0/e+8, type at e+16; stride = entry_size).
+                    uint32_t entry_size = *(uint32_t*)(tag + 8);
+                    uint8_t* e = tag + 16;
+                    uint8_t* tag_end = tag + size;
+                    while (entry_size >= 20 && e + entry_size <= tag_end && g_mmap_count < MAX_MMAP) {
+                        g_mmap[g_mmap_count].base = *(uint64_t*)(e + 0);
+                        g_mmap[g_mmap_count].len  = *(uint64_t*)(e + 8);
+                        g_mmap[g_mmap_count].type = *(uint32_t*)(e + 16);
+                        g_mmap_count++;
+                        e += entry_size;
+                    }
                 }
 
                 tag += (size + 7) & ~7;
@@ -1861,7 +1881,7 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
         mem_total = 256 * 1024 * 1024;
         printf("[INIT] Memory detection failed, using %llu MB\n", mem_total / (1024*1024));
     }
-    printf("[INIT] Physical Memory Manager...\n"); init_memory(mem_total);
+    printf("[INIT] Physical Memory Manager...\n"); init_memory(mem_total, g_mmap, g_mmap_count);
 
     printf("[INIT] Paging...\n"); init_paging();
 
