@@ -55,6 +55,13 @@ typedef struct {
     void*    sched_cur;
     uint64_t idle_rsp;
     int      sched_scan;           // rotating index for round-robin fairness
+
+    // Preemption critical sections, PER CPU (v5.8.99). It was one global, which
+    // was wrong in both directions once a second core scheduled: the BSP's
+    // preempt_disable() meant nothing to an AP, and an AP raising it stopped the
+    // BSP's scheduler outright. "Don't preempt me" is inherently a statement
+    // about one core, so it belongs here.
+    volatile int preempt_count;
 } cpu_info_t;
 
 /* Pin the assembler contract. If this line fails to compile, someone moved a

@@ -824,9 +824,19 @@ int  sched_is_enabled(void) { return sched_enabled; }
 // Preemption critical sections. While nonzero, the scheduler keeps the current
 // thread — used to make the heap (kmalloc/kfree) safe against being preempted
 // mid-update by another thread that also touches it.
-static volatile int preempt_count = 0;
-void preempt_disable(void) { preempt_count++; }
-void preempt_enable(void)  { if (preempt_count > 0) preempt_count--; }
+// Per-CPU as of v5.8.99 (was one global shared by every core — see smp.h).
+//
+// NOTE ON WHAT THIS DOES AND DOES NOT PROMISE: it keeps THIS core from being
+// preempted, and that is all it ever meant. Call sites that were using it as a
+// mutual-exclusion *lock* (net.c, pipe.c, reap_zombies) are only safe while the
+// state they guard is touched by one core — true in the default configuration,
+// not true once user processes run on APs. Those need real spinlocks; that is a
+// separate, labelled piece of work, not something this change quietly fixes.
+void preempt_disable(void) { cpu_self()->preempt_count++; }
+void preempt_enable(void)  {
+    cpu_info_t* me = cpu_self();
+    if (me->preempt_count > 0) me->preempt_count--;
+}
 
 // Point next_rsp/next_cr3 at process p (about to be resumed). Kernel threads run
 // in the kernel address space; user processes get their own CR3, and the TSS
@@ -900,7 +910,9 @@ void irq_scheduler_tick(void) {
                    : (uint64_t)kernel_pml4_phys;   // ring-0 (mid-syscall) -> kernel CR3
 
     // Dormant, in a heap/critical section, or nothing else to schedule.
-    if (!sched_enabled || preempt_count > 0 || process_count == 0) return;
+    // OUR count, not the machine's: an AP inside a critical section used to stop
+    // the BSP from scheduling at all.
+    if (!sched_enabled || cpu_self()->preempt_count > 0 || process_count == 0) return;
     if (!cur) return;
 
     // Weighted round-robin: keep running the current thread until its time quantum

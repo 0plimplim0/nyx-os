@@ -163,6 +163,17 @@ void ap_scheduler_tick(void) {
     extern spinlock_t sched_lock;
 
     process_t* pick = NULL;
+
+    // This core in a critical section: keep running whatever it is, exactly as
+    // the BSP does. Expressed as "pick = cur" rather than an early return
+    // because sc_next_rsp MUST be written before we hand control back to the
+    // stub — returning early would resume the previous tick's stale pointer.
+    if (me->preempt_count > 0) {
+        me->sc_next_rsp = me->sc_saved_rsp;
+        me->sc_next_cr3 = kernel_pml4_phys;   // AP tasks are kernel-side today
+        return;
+    }
+
     uint64_t fl = spin_lock_irqsave(&sched_lock);
     int n = process_count;
     for (int i = 1; i <= n; i++) {
