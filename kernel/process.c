@@ -359,6 +359,14 @@ static void tg_reassign_leader(process_t* dying) {
         dying->mmap_vmas[i].file_size = 0;
     }
     heir->mmap_next = dying->mmap_next;
+    // The fd table moves as well, and is CLEARED in the dying leader so its
+    // close_proc_fds() won't close descriptors the surviving group is still using.
+    for (int i = 0; i < PROC_MAX_FDS; i++) {
+        heir->ufd_inuse[i]  = dying->ufd_inuse[i];
+        heir->ufd_handle[i] = dying->ufd_handle[i];
+        heir->ufd_offset[i] = dying->ufd_offset[i];
+        dying->ufd_inuse[i] = 0;
+    }
     for (int i = 0; i < process_count; i++) {
         process_t* p = process_table[i];
         if (p && p != dying && p->tgid == dying->pid) p->tgid = heir->pid;
@@ -406,16 +414,11 @@ int do_clone(uint64_t fn, uint64_t stack, uint64_t arg, uint64_t flags) {
     t->mmap_next = self->mmap_next;
     strncpy(t->cwd, self->cwd, sizeof(t->cwd) - 1);
     t->cwd[sizeof(t->cwd) - 1] = '\0';
-    // Inherit pipe fds with a refcount bump, exactly as fork does.
-    for (int i = 0; i < PROC_MAX_FDS; i++) {
-        if (self->ufd_inuse[i] && (self->ufd_handle[i] & UFD_PIPE_FLAG)) {
-            t->ufd_inuse[i]  = 1;
-            t->ufd_handle[i] = self->ufd_handle[i];
-            t->ufd_offset[i] = 0;
-            pipe_incref(UFD_PIPE_ID(self->ufd_handle[i]),
-                        UFD_PIPE_IS_WRITE(self->ufd_handle[i]));
-        }
-    }
+    // NO fd copy (unlike fork): the thread group SHARES one fd table, which every fd
+    // syscall reaches through tg_leader() (syscall.c fd_owner()). So a thread's own
+    // table stays empty — that is exactly what makes close_proc_fds() at its exit a
+    // no-op, leaving the group's fds open for its siblings, and it also means no
+    // pipe_incref here (there is only ever the one reference the leader holds).
 
     if (init_thread_task_stack(t, (void*)fn, (void*)stack, arg) < 0) { kfree(t); return -1; }
 

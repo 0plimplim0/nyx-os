@@ -85,8 +85,16 @@ static int user_str_ok(uint64_t ptr) {
 #define POLLNVAL 0x020
 struct kpollfd { int fd; short events; short revents; };   // 8 bytes, matches userspace
 
+/* The fd table belongs to the THREAD GROUP (v5.8.89): every CLONE_VM thread resolves
+ * through tg_leader(), so an fd opened by one thread is visible to all of them and a
+ * close by any of them closes it for the group — POSIX thread semantics. Only these
+ * fd helpers redirect; things like getpid() must still answer for the calling THREAD,
+ * so get_cur_proc() is deliberately left alone elsewhere. A thread's own table stays
+ * empty, which is what makes close_proc_fds() at its exit a safe no-op. */
+static process_t* fd_owner(void) { return tg_leader(get_cur_proc()); }
+
 static int ufd_alloc(int internal) {
-    process_t* p = get_cur_proc();
+    process_t* p = fd_owner();
     if (!p) return -1;
     for (int i = UFD_BASE; i < PROC_MAX_FDS; i++) {
         if (!p->ufd_inuse[i]) {
@@ -97,19 +105,19 @@ static int ufd_alloc(int internal) {
     return -1;
 }
 static int ufd_lookup(int ufd, int* internal) {
-    process_t* p = get_cur_proc();
+    process_t* p = fd_owner();
     if (!p || ufd < 0 || ufd >= PROC_MAX_FDS || !p->ufd_inuse[ufd]) return -1;
     *internal = p->ufd_handle[ufd];
     return 0;
 }
 /* Pointer to a live fd's byte offset (advanced by read/write), or NULL. */
 static uint32_t* ufd_offset_of(int ufd) {
-    process_t* p = get_cur_proc();
+    process_t* p = fd_owner();
     if (!p || ufd < 0 || ufd >= PROC_MAX_FDS || !p->ufd_inuse[ufd]) return 0;
     return &p->ufd_offset[ufd];
 }
 static void ufd_release(int ufd) {
-    process_t* p = get_cur_proc();
+    process_t* p = fd_owner();
     if (p && ufd >= 0 && ufd < PROC_MAX_FDS) p->ufd_inuse[ufd] = 0;
 }
 
@@ -856,7 +864,7 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             // refcounted, so they MOVE (oldfd is cleared) — that way the shell's
             // `dup2(fd,1); close(fd)` leaves exactly one owner and never double-closes.
             int oldfd = (int)a1, newfd = (int)a2;
-            process_t* p = get_cur_proc();
+            process_t* p = fd_owner();          /* the thread group's shared fd table */
             int internal;
             if (!p || ufd_lookup(oldfd, &internal) != 0) return -1;
             if (newfd < 0 || newfd >= PROC_MAX_FDS) return -1;
@@ -887,7 +895,7 @@ uint64_t syscall_handler(uint64_t no, uint64_t a1, uint64_t a2, uint64_t a3,
             // the new fd just aliases the same handle (vfs_close is a no-op for the
             // ramdisk nodes ring 3 opens, so closing either fd later is safe).
             int oldfd = (int)a1;
-            process_t* p = get_cur_proc();
+            process_t* p = fd_owner();          /* the thread group's shared fd table */
             int internal;
             if (!p || ufd_lookup(oldfd, &internal) != 0) return -1;
             int newfd = ufd_alloc(internal);          /* lowest free slot (>= UFD_BASE) */

@@ -25,6 +25,7 @@ static volatile int counter = 0;   /* what the threads fight over (non-atomic on
 static volatile int done    = 0;   /* how many workers have finished */
 static char  stacks[NTHREADS][STACKSZ];
 static void* blocks[NTHREADS];     /* each worker's malloc'd block */
+static volatile int shared_fd = -1; /* opened by a THREAD, then used by main */
 
 static void lock_acquire(void) {
     for (;;) {
@@ -50,6 +51,13 @@ static void worker(void* arg) {
     char* b = (char*)malloc(BLKSZ);
     blocks[id] = b;
     if (b) for (int i = 0; i < BLKSZ; i++) b[i] = (char)('A' + id);
+
+    /* fd test: one thread opens a file and leaves it open. With a per-thread fd table
+     * this descriptor would be invisible to main; with the group table it just works. */
+    if (id == 0) {
+        int fd = (int)open("/thrfd.txt", O_CREAT, 0);
+        if (fd >= 0) { write(fd, "shared-fd", 9); shared_fd = fd; }
+    }
 
     for (int i = 0; i < ITERS; i++) {
         lock_acquire();
@@ -95,5 +103,18 @@ int main(void) {
     printf("threads: heap    = %s (%d per-thread malloc blocks distinct + intact)\n",
            heap_ok ? "OK" : "OVERLAP/CORRUPT", NTHREADS);
 
-    return (counter == expected && heap_ok) ? 0 : 1;
+    /* The fd was opened by thread 0; main reading through it proves the group shares
+     * one descriptor table (with a per-thread table this fd simply wouldn't exist here). */
+    int fd_ok = 0;
+    if (shared_fd >= 0) {
+        char buf[16];
+        lseek(shared_fd, 0, SEEK_SET);
+        int n = read(shared_fd, buf, 9);
+        fd_ok = (n == 9 && buf[0] == 's' && buf[8] == 'd');
+        close(shared_fd);
+    }
+    printf("threads: fds     = %s (main used fd %d opened by a thread)\n",
+           fd_ok ? "OK" : "NOT SHARED", shared_fd);
+
+    return (counter == expected && heap_ok && fd_ok) ? 0 : 1;
 }

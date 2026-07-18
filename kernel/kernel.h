@@ -43,7 +43,7 @@ typedef __builtin_va_list va_list;
 // ============================================================
 #define NULL ((void*)0)
 #define KERNEL_NAME    "NyxOS"
-#define KERNEL_VERSION "5.8.88"
+#define KERNEL_VERSION "5.8.89"
 #define KERNEL_CODENAME "GUI Suite"
 #define KERNEL_DATE    "2026"
 
@@ -127,7 +127,7 @@ typedef __builtin_va_list va_list;
 #define SYS_FUTEX    51   /* futex(uaddr, op, val) — FUTEX_WAIT / FUTEX_WAKE */
 
 /* ------------------------------------------------------------------ */
-/*  Threads (v5.8.88) — clone(CLONE_VM) + futex                        */
+/*  Threads (v5.8.89) — clone(CLONE_VM) + futex                        */
 /* ------------------------------------------------------------------ */
 /* CLONE_VM: the new task SHARES the caller's address space (same PML4) instead of
  * getting a COW copy — i.e. a real thread. It runs `fn(arg)` on the caller-supplied
@@ -755,7 +755,7 @@ void init_idt(void);
 void idt_set_gate(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags);
 void idt_set_gate_ist(uint8_t num, uint64_t base, uint16_t sel, uint8_t flags, uint8_t ist);
 
-// User ring-3 stack (v5.8.88: demand-grown with a guard page). The TOP page is at
+// User ring-3 stack (v5.8.89: demand-grown with a guard page). The TOP page is at
 // USER_STACK_TOP (the SysV entry frame sits at its top); the stack grows DOWN. Only
 // USER_STACK_INIT_PAGES are committed at load (elf_load_image / create_user_process);
 // vm_handle_fault materialises further pages on touch, down to a floor of
