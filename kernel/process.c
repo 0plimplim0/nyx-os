@@ -424,10 +424,16 @@ int do_clone(uint64_t fn, uint64_t stack, uint64_t arg, uint64_t flags) {
     // lookup resolves through tg_leader(), so the WHOLE group shares one heap and one
     // mmap table — that's what makes malloc/mmap coherent across threads.
     t->tgid           = tg_leader(self)->pid;
-    // Pin the whole thread group to ONE core. Threads share a PML4, so if two
-    // ran on different cores an unmap on one would leave a stale TLB entry on
-    // the other — and NyxOS has no shootdown IPI yet. Processes are free to
-    // spread (each has its own tables); a thread group is not.
+    // Where this thread runs. Spreading a thread group across cores needs two
+    // things, and v5.8.96 only had one: the page tables coherent (TLB
+    // shootdown), AND every task able to identify itself on the core it is
+    // actually running on (get_current_process, fixed in v5.8.97 — until then a
+    // thread on an AP blocked the BSP's task instead of its own and the machine
+    // wedged). Opt-in, so the default placement stays exactly as it always was.
+    // STILL PINNED. The v5.8.97 fix removed the wedge — threads now complete
+    // when spread — but the next failure is immediate: `pstorm` panics with a
+    // **#GP (err 0x8) at RIP 0x10049f**, inside the interrupt-stub / ring
+    // transition path, after two iterations. One layer at a time.
     t->sched_cpu      = tg_leader(self)->sched_cpu;
     t->program_break  = self->program_break;
     t->heap_start     = self->heap_start;
@@ -763,7 +769,21 @@ process_t* find_process(uint64_t pid) {
     return NULL;
 }
 
+// "Which process is running right now?" — the question every syscall asks first.
+//
+// This was BSP-only and silently wrong for anything running on an application
+// processor: `current_idx` is written solely by irq_scheduler_tick, the BSP's
+// scheduler, so a task on an AP resolved to whatever the BSP happened to be
+// running. It cost two increments to find, because the failure is quiet — a
+// thread calling futex_wait would block the BSP's task instead of itself, and
+// the machine just wedged with no fault and no panic. Work that never asks who
+// it is (spin.elf writing to serial) looked perfectly healthy throughout.
+//
+// Each AP tracks its own current task in cpu_info[].sched_cur; NULL there means
+// the core is in its idle context, which is exactly "no current process".
 process_t* get_current_process(void) {
+    cpu_info_t* me = cpu_self();
+    if (me->cpu_number != 0) return (process_t*)me->sched_cur;
     if (process_count > 0 && current_idx < process_count)
         return process_table[current_idx];
     return NULL;

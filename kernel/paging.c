@@ -418,7 +418,13 @@ int vm_handle_fault(uint64_t cr2, uint64_t err) {
             *pte = ((uint64_t)newp & PTE_ADDR_MASK) | PAGE_PRESENT | PAGE_WRITABLE
                  | (e & PAGE_USER) | (e & PAGE_NX);
         }
-        invlpg((void*)cr2);
+        // COW REPLACES an existing translation: the old one pointed at a shared,
+        // read-only frame. Any other core in this SAME address space (i.e. a
+        // sibling thread) holding it cached would keep READING the old frame
+        // after we privatised the page — so this must be broadcast, not just
+        // invalidated locally. Reached with interrupts off, which tlb_shootdown
+        // handles by enabling them for its duration and restoring IF after.
+        tlb_shootdown(cr2);
         vm_cow_faults++;
         return 1;
     }

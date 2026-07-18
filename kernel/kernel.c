@@ -59,6 +59,7 @@ static void cmd_smpstress(int argc, char** argv);
 static void cmd_smpthreads(int argc, char** argv);
 static void cmd_smpuser(int argc, char** argv);
 static void cmd_tlbtest(int argc, char** argv);
+static void cmd_smpbalance(int argc, char** argv);
 static void cmd_cowtest(int argc, char** argv);
 static void cmd_crash(int argc, char** argv);
 static void cmd_hexdump(int argc, char** argv);
@@ -137,6 +138,7 @@ static const command_t commands[] = {
     {"smpthreads",cmd_smpthreads,"Run the per-AP kernel threads: smpthreads [secs]", false},
     {"smpuser",   cmd_smpuser,   "Spread user processes over the CPUs: smpuser [n]", false},
     {"tlbtest",   cmd_tlbtest,   "Prove cross-CPU TLB shootdown works", false},
+    {"smpbalance",cmd_smpbalance,"Spread new processes AND threads over CPUs: smpbalance [on|off]", false},
     {"cowtest",   cmd_cowtest,   "Test demand paging + copy-on-write", false},
 
     {"crash",     cmd_crash,     "Trigger a kernel panic", false},
@@ -1604,6 +1606,26 @@ static void cmd_tlbtest(int argc, char** argv) {
            (baseline_ok && fresh_ok)
                ? (was_stale ? "SHOOTDOWN PROVEN" : "shootdown path works, but unproven")
                : "FAILED");
+}
+
+// Opt-in multi-core placement for both processes and threads. Threads only
+// became safe to spread once unmap, mprotect and the COW remap all shoot down
+// the other cores — before that a sibling on another core could keep using a
+// translation this one had already replaced.
+static void cmd_smpbalance(int argc, char** argv) {
+    if (argc >= 2) {
+        if (strcmp(argv[1], "on") == 0)       smp_user_balance = 1;
+        else if (strcmp(argv[1], "off") == 0) smp_user_balance = 0;
+    }
+    printf("smpbalance: %s (%u CPU(s) online, %lu shootdowns so far)\n",
+           smp_user_balance ? "on — new processes spread over all CPUs"
+                            : "off — everything stays on CPU 0",
+           cpu_count, tlb_shootdowns);
+    if (smp_user_balance)
+        printf("smpbalance: WARNING — fork/exec-heavy workloads (e.g. pstorm) wedge with\n"
+               "            this on. Long-lived processes are fine; churn is not, and the\n"
+               "            cause is not the page tables (TLB shootdown is live). Threads\n"
+               "            of one group stay on one core regardless.\n");
 }
 
 static void cmd_cowtest(int argc, char** argv) {
