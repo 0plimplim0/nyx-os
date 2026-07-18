@@ -1823,6 +1823,35 @@ static void* saved_mboot_ptr = NULL;
 static mb_mmap_entry_t g_mmap[MAX_MMAP];
 static int g_mmap_count = 0;
 
+// Enable the CPU's Supervisor Mode Execution/Access Prevention (SMEP/SMAP), if the
+// processor advertises them (CPUID.(EAX=7,ECX=0):EBX bit 7 = SMEP, bit 20 = SMAP).
+//  - SMEP (CR4.SMEP, bit 20): a #GP if ring 0 tries to EXECUTE a user (U=1) page.
+//  - SMAP (CR4.SMAP, bit 21): a #GP if ring 0 READS/WRITES a user page unless RFLAGS.AC
+//    is set (via stac/clac).
+// NyxOS's kernel never touches user pages directly: it runs on the kernel CR3 (where
+// user pages aren't mapped) and reaches user data only by walking the user tables to a
+// PHYSICAL address and accessing it through the identity map (a supervisor page). So no
+// stac/clac bracketing is needed, and enabling these is a HARDWARE-ENFORCED audit of
+// that isolation invariant — any future stray user-VA access from ring 0 now traps
+// instead of silently succeeding. We CLAC afterwards so AC starts cleared (the kernel
+// never wants it). Called on the BSP after paging is up, and by each AP (smp.c).
+// Note: the default QEMU `qemu64` CPU does NOT advertise SMEP/SMAP, so this is a no-op
+// there; run with `-cpu qemu64,+smep,+smap` (or a Haswell+/`max` model) to activate it.
+void enable_smep_smap(void) {
+    uint32_t eax, ebx, ecx, edx;
+    __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(7), "c"(0));
+    int have_smep = (ebx >> 7)  & 1;
+    int have_smap = (ebx >> 20) & 1;
+    uint64_t cr4;
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    if (have_smep) cr4 |= (1UL << 20);
+    if (have_smap) cr4 |= (1UL << 21);
+    __asm__ volatile("mov %0, %%cr4" :: "r"(cr4) : "memory");
+    if (have_smap) __asm__ volatile("clac");   // start with AC clear (only legal once SMAP is on)
+    printf("[CPU] SMEP=%s SMAP=%s\n", have_smep ? "on" : "unavailable",
+           have_smap ? "on" : "unavailable");
+}
+
 void kernel_main(uint64_t magic, void* mboot_ptr) {
     (void)magic;
     saved_mboot_ptr = mboot_ptr;
@@ -1884,6 +1913,7 @@ void kernel_main(uint64_t magic, void* mboot_ptr) {
     printf("[INIT] Physical Memory Manager...\n"); init_memory(mem_total, g_mmap, g_mmap_count);
 
     printf("[INIT] Paging...\n"); init_paging();
+    printf("[INIT] CPU protections (SMEP/SMAP)...\n"); enable_smep_smap();
 
     nyxfetch();
     for (volatile long i = 0; i < 200000000; i++);

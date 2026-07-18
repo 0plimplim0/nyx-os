@@ -162,6 +162,10 @@ void ap_main(uint32_t cpu_id) {
     cpu_info[cpu_id].started = 1;
     cpu_info[cpu_id].running = 1;
 
+    // CR4 is per-CPU: match the BSP's SMEP/SMAP so every core enforces the same
+    // ring-0 isolation (a no-op on CPUs that don't advertise them).
+    enable_smep_smap();
+
     // HLT yields VCPU to BSP in single-threaded TCG. cli prevents NMIs
     // (which lack handler setup) from waking the AP.
     __asm__ volatile("cli");
