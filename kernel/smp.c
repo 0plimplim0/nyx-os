@@ -12,6 +12,7 @@ extern uint8_t _binary_trampoline_bin_end[];
 // AP interrupt stubs (isr_stubs.asm)
 extern void ap_timer_stub(void);
 extern void ap_spurious_stub(void);
+extern void tlb_ipi_stub(void);
 
 // LAPIC timer reload value. Deliberately UNCALIBRATED: the exact rate is
 // irrelevant while all an AP does is count, and calibrating needs a reference
@@ -45,6 +46,76 @@ cpu_info_t* cpu_self(void) {
 // kmalloc or the scheduler would race the BSP.
 void ap_timer_tick(void) {
     cpu_self()->ticks++;
+    apic_eoi();
+}
+
+/* ------------------------------------------------------------------------- */
+/*  TLB shootdown (v5.8.94)                                                    */
+/* ------------------------------------------------------------------------- */
+/* Changing a page table entry only invalidates the TLB of the core that did it.
+ * Every OTHER core that has the old translation cached keeps using it — reading
+ * or writing a page that, as far as the page tables are concerned, is gone. The
+ * fix is to interrupt those cores and make them invalidate it too.
+ *
+ * DEADLOCK IS THE WHOLE DESIGN PROBLEM HERE, and it has two shapes:
+ *
+ *  1) Two cores shooting down at once. The sender holds a lock and waits for the
+ *     others to acknowledge. If the second core spun on that lock with
+ *     INTERRUPTS DISABLED it could never service the first core's IPI, and both
+ *     would wait forever. So this lock is taken with plain spin_lock() — NOT
+ *     spin_lock_irqsave — and the acknowledgement wait runs with interrupts on.
+ *     A core waiting its turn stays interruptible, which is what breaks the
+ *     cycle.
+ *
+ *  2) Shooting down while holding a lock other cores spin on with interrupts
+ *     off. page_lock and kmalloc_lock are exactly that. THE RULE: never call
+ *     tlb_shootdown() while holding one. Callers are safe today because
+ *     alloc_page/free_page/kmalloc take and release those internally and are
+ *     never still holding one when they return to the caller doing the unmap.
+ */
+static spinlock_t shootdown_lock = SPINLOCK_INIT;
+static volatile uint64_t shootdown_addr;
+static volatile uint32_t shootdown_pending;   // bitmask of CPUs yet to acknowledge
+
+uint64_t tlb_shootdowns = 0;                  // observability: how many we've sent
+
+// Invalidate `vaddr` on THIS core and on every other online core, returning
+// only once they have all confirmed. See the deadlock note above before adding
+// a caller.
+void tlb_shootdown(uint64_t vaddr) {
+    __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");   // always ours
+    if (cpu_count < 2 || !lapic) return;
+
+    spin_lock(&shootdown_lock);        // deliberately NOT irqsave — see above
+    uint32_t mask = 0;
+    for (uint32_t i = 0; i < cpu_count && i < MAX_CPUS; i++)
+        if (cpu_info[i].running && i != cpu_self()->cpu_number) mask |= (1u << i);
+
+    if (mask) {
+        shootdown_addr = vaddr;
+        __asm__ volatile("" ::: "memory");
+        shootdown_pending = mask;
+        __asm__ volatile("mfence" ::: "memory");
+        apic_send_ipi_all_but_self(IPI_TLB_VECTOR);
+
+        // Bounded wait: a core that never answers (wedged, or stopped) must not
+        // hang the machine — better a possibly-stale TLB on one core than a
+        // dead system, and the count below makes it visible if it ever happens.
+        int spins = 0;
+        while (shootdown_pending && ++spins < 100000000)
+            __asm__ volatile("pause" ::: "memory");
+        if (shootdown_pending) shootdown_pending = 0;
+    }
+    tlb_shootdowns++;
+    spin_unlock(&shootdown_lock);
+}
+
+// The IPI handler. Runs on every core except the sender.
+void tlb_shootdown_ipi(void) {
+    __asm__ volatile("invlpg (%0)" :: "r"(shootdown_addr) : "memory");
+    uint32_t bit = 1u << cpu_self()->cpu_number;
+    __asm__ volatile("lock andl %1, %0"
+                     : "+m"(shootdown_pending) : "r"(~bit) : "memory");
     apic_eoi();
 }
 
@@ -120,9 +191,46 @@ void ap_scheduler_tick(void) {
 // It also takes over the allocator hammer: once a worker exists, the scheduler
 // always picks it over the idle context, so smpstress would otherwise stop
 // seeing any AP participation.
+// TLB-test rendezvous. The BSP bumps tlb_test_req; CPU 1 reads the watched
+// address and echoes the sequence back. Only one core answers, so the value
+// reported is unambiguously one core's view through its own TLB.
+volatile int      tlb_test_req = 0;
+volatile int      tlb_test_ack = 0;
+volatile uint64_t tlb_test_va  = 0;
+volatile uint64_t tlb_test_v1 = 0, tlb_test_v2 = 0, tlb_test_v3 = 0;
+
+// The three-phase protocol CPU 1 runs for cmd_tlbtest.
+//
+// Phase 1->2 is taken with INTERRUPTS OFF, and that is the entire point. This
+// core reloads CR3 on every timer tick (a context switch), and a CR3 reload
+// flushes the TLB — so with interrupts on, a stale entry evaporates by itself
+// within a millisecond and the test can never observe one. Holding interrupts
+// off across the remap is what creates a window where staleness is real and
+// therefore measurable. Interrupts come back on before phase 3, because the
+// shootdown IPI cannot be delivered to a core that is not listening.
+static void tlb_test_participate(void) {
+    long guard;
+    __asm__ volatile("cli");
+    tlb_test_v1 = *(volatile uint64_t*)tlb_test_va;   // caches the translation
+    tlb_test_ack = 1;
+    guard = 0;
+    while (tlb_test_req == 1 && ++guard < 100000000) __asm__ volatile("pause");
+    tlb_test_v2 = *(volatile uint64_t*)tlb_test_va;   // remapped, nobody told us
+    tlb_test_ack = 2;
+    __asm__ volatile("sti");                          // now we can hear the IPI
+    guard = 0;
+    while (tlb_test_req == 2 && ++guard < 100000000) __asm__ volatile("pause");
+    tlb_test_v3 = *(volatile uint64_t*)tlb_test_va;   // after the shootdown
+    tlb_test_ack = 3;
+}
+
 static void ap_worker(void) {
     for (;;) {
         cpu_info_t* me = cpu_self();
+        if (tlb_test_req == 1 && tlb_test_ack == 0 && me->cpu_number == 1 && tlb_test_va) {
+            tlb_test_participate();
+            continue;
+        }
         if (smp_stress_active)    smp_stress_iteration(me);
         else if (smp_work_active) me->work_ops++;
         else __asm__ volatile("hlt");
@@ -301,6 +409,7 @@ void smp_init(void) {
     // the first LAPIC timer can fire while we are still in this loop sending
     // SIPIs to the next core.
     idt_set_gate(AP_TIMER_VECTOR,    (uint64_t)ap_timer_stub    + KERNEL_BASE, 0x08, 0x8E);
+    idt_set_gate(IPI_TLB_VECTOR,     (uint64_t)tlb_ipi_stub     + KERNEL_BASE, 0x08, 0x8E);
     idt_set_gate(AP_SPURIOUS_VECTOR, (uint64_t)ap_spurious_stub + KERNEL_BASE, 0x08, 0x8E);
 
     // The BSP is always CPU 0 and online — record it up front so `cpus`/nyxfetch

@@ -58,6 +58,7 @@ static void cmd_cpus(int argc, char** argv);
 static void cmd_smpstress(int argc, char** argv);
 static void cmd_smpthreads(int argc, char** argv);
 static void cmd_smpuser(int argc, char** argv);
+static void cmd_tlbtest(int argc, char** argv);
 static void cmd_cowtest(int argc, char** argv);
 static void cmd_crash(int argc, char** argv);
 static void cmd_hexdump(int argc, char** argv);
@@ -135,6 +136,7 @@ static const command_t commands[] = {
     {"smpstress", cmd_smpstress, "Hammer the allocators from every CPU: smpstress [secs]", false},
     {"smpthreads",cmd_smpthreads,"Run the per-AP kernel threads: smpthreads [secs]", false},
     {"smpuser",   cmd_smpuser,   "Spread user processes over the CPUs: smpuser [n]", false},
+    {"tlbtest",   cmd_tlbtest,   "Prove cross-CPU TLB shootdown works", false},
     {"cowtest",   cmd_cowtest,   "Test demand paging + copy-on-write", false},
 
     {"crash",     cmd_crash,     "Trigger a kernel panic", false},
@@ -1533,6 +1535,75 @@ static void cmd_smpuser(int argc, char** argv) {
     smp_user_balance = 0;
     printf("smpuser: %d/%d placed on APs, %d AP(s) executing ring 3 -> %s\n",
            on_ap, n, aps_on_user, aps_on_user > 0 ? "USERSPACE ON APs OK" : "check");
+}
+
+// Prove cross-CPU TLB shootdown, with a test built to be able to FAIL.
+//
+// A shootdown test that only ever checks the good path proves nothing: if the
+// machine never cached stale translations to begin with, it would pass either
+// way. So this runs the remap TWICE — once WITHOUT a shootdown, where CPU 1
+// must still read the OLD value out of its own TLB, and once WITH, where it
+// must read the new one. The first read is what gives the second its meaning.
+static int tlb_wait_ack(int want) {
+    for (int spin = 0; spin < 600 && tlb_test_ack < want; spin++) sleep(5);
+    return tlb_test_ack >= want;
+}
+
+static void cmd_tlbtest(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (cpu_count < 2) { printf("tlbtest: needs more than one CPU (boot with -smp N)\n"); return; }
+
+    // Allocated once and kept: the VA below stays mapped at these frames, so
+    // re-running the command must not hand them back to the allocator.
+    static void* pa = NULL; static void* pb = NULL;
+    if (!pa) { pa = alloc_page(); pb = alloc_page(); }
+    if (!pa || !pb) { printf("tlbtest: out of memory\n"); return; }
+    *(volatile uint64_t*)pa = 0xAAAAAAAAAAAAAAAAULL;
+    *(volatile uint64_t*)pb = 0xBBBBBBBBBBBBBBBBULL;
+
+    const uint64_t va = 0xFFFFB00000000000ULL;   // an otherwise unused kernel slot
+    uint64_t flags = PAGE_PRESENT | PAGE_WRITABLE | PAGE_NX;
+
+    map_page(pa, (void*)va, flags);
+    tlb_shootdown(va);                            // start from a known-clean state
+
+    tlb_test_v1 = tlb_test_v2 = tlb_test_v3 = 0;
+    tlb_test_ack = 0;
+    tlb_test_va  = va;
+    tlb_test_req = 1;                             // CPU 1: cli, read, then hold
+    if (!tlb_wait_ack(1)) { printf("tlbtest: CPU 1 never answered\n"); return; }
+
+    // Remap to B and invalidate ONLY locally. CPU 1 is sitting with interrupts
+    // off, so nothing has cleared its cached translation.
+    map_page(pb, (void*)va, flags);
+    __asm__ volatile("invlpg (%0)" :: "r"(va) : "memory");
+    tlb_test_req = 2;                             // CPU 1: read again, still blind
+    if (!tlb_wait_ack(2)) { printf("tlbtest: CPU 1 stalled at phase 2\n"); return; }
+
+    // Now tell it properly. CPU 1 has re-enabled interrupts and can hear us.
+    uint64_t before = tlb_shootdowns;
+    tlb_shootdown(va);
+    tlb_test_req = 3;
+    if (!tlb_wait_ack(3)) { printf("tlbtest: CPU 1 stalled at phase 3\n"); return; }
+
+    uint64_t r0 = tlb_test_v1, r1 = tlb_test_v2, r2 = tlb_test_v3;
+    printf("tlbtest: CPU1 baseline      = 0x%lx  (expect 0xAAAA...)\n", r0);
+    printf("tlbtest: CPU1 after remap   = 0x%lx  (no shootdown yet, IRQs off)\n", r1);
+    printf("tlbtest: CPU1 after IPI     = 0x%lx  (expect 0xBBBB...)\n", r2);
+    printf("tlbtest: shootdowns sent    = %lu\n", tlb_shootdowns - before);
+
+    int baseline_ok = (r0 == 0xAAAAAAAAAAAAAAAAULL);
+    int fresh_ok    = (r2 == 0xBBBBBBBBBBBBBBBBULL);
+    int was_stale   = (r1 == 0xAAAAAAAAAAAAAAAAULL);
+    // Reported separately and honestly: without a stale read in the middle the
+    // machine never needed the shootdown, so the pass says nothing about it.
+    printf("tlbtest: stale-without-IPI  = %s\n",
+           was_stale ? "YES (so the test could have failed)"
+                     : "NO — this core saw the remap unaided, result is INCONCLUSIVE");
+    printf("tlbtest: %s\n",
+           (baseline_ok && fresh_ok)
+               ? (was_stale ? "SHOOTDOWN PROVEN" : "shootdown path works, but unproven")
+               : "FAILED");
 }
 
 static void cmd_cowtest(int argc, char** argv) {

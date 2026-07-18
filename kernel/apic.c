@@ -197,6 +197,15 @@ void apic_send_ipi(uint32_t apic_id, uint32_t icr_low) {
     lapic_write(LAPIC_ICR0, icr_low);
 }
 
+// Fixed-delivery IPI to every CPU except this one, using the ICR's "all
+// excluding self" destination shorthand (bits 19:18 = 0b11) — no destination
+// field and no per-target loop, so one write reaches the whole machine.
+void apic_send_ipi_all_but_self(uint8_t vector) {
+    if (!lapic) return;
+    if (apic_wait_delivery()) printf("[APIC] WARNING: ICR busy before broadcast IPI\n");
+    lapic_write(LAPIC_ICR0, (3u << 18) | ICR_ASSERT | ICR_FIXED | vector);
+}
+
 void apic_send_init_ipi(uint32_t apic_id) {
     // Level-assert INIT
     apic_send_ipi(apic_id, ICR_INIT | ICR_PHYSICAL | ICR_LEVEL | ICR_ASSERT);

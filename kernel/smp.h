@@ -8,6 +8,7 @@
 // per-CPU device, so this vector only ever fires on the core it was programmed
 // on — the BSP keeps its own timer masked and stays on the PIT's IRQ0.
 #define AP_TIMER_VECTOR     0x40
+#define IPI_TLB_VECTOR      0x41   // "invalidate this address on your core too"
 #define AP_SPURIOUS_VECTOR  0xFF
 
 // The per-CPU block. Anything a core may touch while another core runs belongs
@@ -92,5 +93,16 @@ void ap_scheduler_tick(void);
 void smp_start_ap_threads(void);
 extern volatile int smp_work_active;
 extern volatile int smp_user_balance;   // spread new user processes over the APs
+
+// TLB shootdown. Read the deadlock note in smp.c before adding a caller.
+void tlb_shootdown(uint64_t vaddr);
+void tlb_shootdown_ipi(void);
+extern uint64_t tlb_shootdowns;
+
+// tlbtest rendezvous (see cmd_tlbtest): CPU 1 reads tlb_test_va on request.
+extern volatile int      tlb_test_req;
+extern volatile int      tlb_test_ack;
+extern volatile uint64_t tlb_test_va;
+extern volatile uint64_t tlb_test_v1, tlb_test_v2, tlb_test_v3;
 
 #endif

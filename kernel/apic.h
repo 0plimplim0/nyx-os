@@ -91,6 +91,7 @@ void ioapic_unmask_irq(uint8_t irq);
 uint32_t apic_get_id(void);
 uint32_t apic_get_cpu_count(void);
 void apic_send_ipi(uint32_t apic_id, uint32_t icr_low);
+void apic_send_ipi_all_but_self(uint8_t vector);
 void apic_send_init_ipi(uint32_t apic_id);
 void apic_send_sipi(uint32_t apic_id, uint8_t vector);
 uint32_t apic_wait_delivery(void);

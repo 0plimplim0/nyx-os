@@ -395,6 +395,54 @@ ap_timer_stub:
     hlt
     jmp .ap_bad_cr3
 
+; ---------------------------------------------------------------------------
+; TLB shootdown IPI (vector IPI_TLB_VECTOR).
+;
+; Arrives on any core, at any moment, including one running a USER process — so
+; it must switch to the kernel tables before calling C (whose low
+; -mcmodel=large code is unmapped under a user CR3) and put the interrupted
+; CR3 back before returning. The old CR3 rides on the stack, and the 11 pushes
+; leave RSP 16-byte aligned at the call, as the ABI requires.
+;
+; No context switch: this handler must be short and must not touch the
+; scheduler. It invalidates one address, acknowledges, and leaves.
+; ---------------------------------------------------------------------------
+extern tlb_shootdown_ipi
+
+global tlb_ipi_stub
+tlb_ipi_stub:
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+    push rbx                     ; RBX is callee-saved and clobbered just below
+    mov rax, cr3
+    push rax                     ; interrupted CR3 (11 pushes -> RSP 16-aligned)
+    mov rax, kernel_pml4_phys
+    mov rbx, KERNEL_BASE
+    add rax, rbx
+    mov rax, [rax]
+    mov cr3, rax
+    call tlb_shootdown_ipi
+    pop rax                      ; interrupted CR3
+    mov cr3, rax
+    pop rbx
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    iretq
+
 ; Spurious LAPIC interrupt. It takes no EOI by design — the only job here is to
 ; exist, so a spurious vector can't fault an AP into a triple fault.
 global ap_spurious_stub
