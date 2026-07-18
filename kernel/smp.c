@@ -86,6 +86,16 @@ void tlb_shootdown(uint64_t vaddr) {
     __asm__ volatile("invlpg (%0)" :: "r"(vaddr) : "memory");   // always ours
     if (cpu_count < 2 || !lapic) return;
 
+    // Callers reach us with interrupts DISABLED: syscalls run under SF_MASK
+    // (which clears IF) and the fault handlers sit behind interrupt gates. That
+    // is fatal here — a core that cannot take an interrupt cannot acknowledge
+    // anyone else's shootdown, which is deadlock shape (1) wearing a disguise.
+    // So enable interrupts for the duration and put the caller's IF back exactly
+    // as it was on the way out. We are never called from an IRQ handler, only
+    // from syscall/fault context, where being interruptible is already normal.
+    uint64_t rflags;
+    __asm__ volatile("pushfq; popq %0; sti" : "=r"(rflags) :: "memory");
+
     spin_lock(&shootdown_lock);        // deliberately NOT irqsave — see above
     uint32_t mask = 0;
     for (uint32_t i = 0; i < cpu_count && i < MAX_CPUS; i++)
@@ -108,6 +118,7 @@ void tlb_shootdown(uint64_t vaddr) {
     }
     tlb_shootdowns++;
     spin_unlock(&shootdown_lock);
+    __asm__ volatile("pushq %0; popfq" :: "r"(rflags) : "memory", "cc");
 }
 
 // The IPI handler. Runs on every core except the sender.

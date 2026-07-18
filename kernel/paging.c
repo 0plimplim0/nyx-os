@@ -436,7 +436,12 @@ void vm_free_range(uint64_t* pml4, uint64_t start, uint64_t end) {
         if (pte && (*pte & PAGE_PRESENT)) {
             free_page((void*)(*pte & PTE_ADDR_MASK));
             *pte = 0;
-            invlpg((void*)va);
+            // A mapping going AWAY is the case that needs every core told: one
+            // still holding this translation would keep reading a frame that has
+            // already gone back to the allocator. Safe to call here — free_page
+            // released page_lock before returning, and the shootdown rule is
+            // never to hold it (or kmalloc_lock) across this.
+            tlb_shootdown(va);
         }
     }
 }
@@ -453,7 +458,10 @@ void vm_protect_range(uint64_t* pml4, uint64_t start, uint64_t end, int prot) {
             if (prot & PROT_WRITE) f |= PAGE_WRITABLE;
             if (!(prot & PROT_EXEC)) f |= PAGE_NX;
             *pte = (*pte & PTE_ADDR_MASK) | f;
-            invlpg((void*)va);
+            // mprotect can only ever RESTRICT what another core already has
+            // cached (a writable entry becoming read-only), so it must be
+            // broadcast for the new protection to actually bind.
+            tlb_shootdown(va);
         }
     }
 }
@@ -525,7 +533,7 @@ int vm_map_cow(uint64_t virt, uint64_t phys) {
 }
 void vm_unmap(uint64_t virt) {
     uint64_t* pte = pte_ptr(current_pml4, virt, 0);
-    if (pte) { *pte = 0; invlpg((void*)virt); }
+    if (pte) { *pte = 0; tlb_shootdown(virt); }   // removal: tell every core
 }
 uint64_t vm_stat_demand(void) { return vm_demand_faults; }
 uint64_t vm_stat_cow(void) { return vm_cow_faults; }
