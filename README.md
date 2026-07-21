@@ -7,9 +7,9 @@
   <br/><br/>
   <!-- Badges -->
   <a href="https://github.com/kazah-png/nyx-os/releases/tag/v5.9.0-LTS">
-    <img src="https://img.shields.io/badge/release-v5.9.0-LTS-00ff9d?style=flat" />
+    <img src="https://img.shields.io/badge/release-v5.9.0--LTS-00ff9d?style=flat" />
   </a>
-  <img src="https://img.shields.io/badge/status-v5.9.0-LTS-00ff9d?style=flat" />
+  <img src="https://img.shields.io/badge/status-v5.9.0--LTS-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/TCP-yes-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/GUI-window%20compositor-00ff9d?style=flat" />
   <img src="https://img.shields.io/badge/%F0%9F%8C%99%20NyxC-runtime-8b5cf6?style=flat" />
