@@ -118,11 +118,13 @@ static void cmd_httpget(int argc, char** argv);
 static void cmd_setip(int argc, char** argv);
 static void cmd_mount(int argc, char** argv);
 static void cmd_df(int argc, char** argv);
+static void cmd_setres(int argc, char** argv);
 
 static const command_t commands[] = {
     {"help",      cmd_help,      "Show this help", false},
     {"version",   cmd_version,   "Show kernel version", false},
     {"clear",     cmd_clear,     "Clear the screen", false},
+    {"setres",    cmd_setres,    "Set screen resolution (setres 800 600)", false},
     {"nyxfetch",  cmd_nyxfetch,  "Show system info with ASCII logo", false},
     {"fastfetch", cmd_nyxfetch,  "Alias for nyxfetch", false},
     {"echo",      cmd_echo,      "Print a line of text", false},
@@ -371,6 +373,39 @@ static void cmd_version(int argc, char** argv) {
 static void cmd_clear(int argc, char** argv) {
     (void)argc; (void)argv;
     clear_screen();
+}
+
+// Change the screen mode from the shell — the same thing the Settings Display
+// tab does, through the same function, so the two can never disagree.
+//
+// The mode list is a whitelist on purpose: vbe_set_mode() validates nothing and
+// programs whatever numbers it is handed straight into the VBE registers, so a
+// typo like `setres 640 4800` would leave the machine with no usable display and
+// no way to type the command that would fix it.
+static void cmd_setres(int argc, char** argv) {
+    static const struct { uint32_t w, h; } modes[] = {
+        {640,480}, {800,600}, {1024,768}, {1280,720}
+    };
+    const int nmodes = (int)(sizeof(modes) / sizeof(modes[0]));
+
+    if (argc != 3) {
+        printf("Usage: setres <width> <height>\n");
+        printf("Current: %ux%u\n", fb_get_width(), fb_get_height());
+        printf("Modes:");
+        for (int i = 0; i < nmodes; i++) printf(" %ux%u", modes[i].w, modes[i].h);
+        printf("\n");
+        return;
+    }
+
+    uint32_t w = (uint32_t)atoi(argv[1]);
+    uint32_t h = (uint32_t)atoi(argv[2]);
+    for (int i = 0; i < nmodes; i++) {
+        if (modes[i].w == w && modes[i].h == h) {
+            display_set_mode(w, h);
+            return;
+        }
+    }
+    printf("setres: unsupported mode %ux%u (try `setres` for the list)\n", w, h);
 }
 
 static void cmd_nyxfetch(int argc, char** argv) {

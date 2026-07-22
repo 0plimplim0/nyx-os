@@ -822,7 +822,10 @@ static void do_start_menu_action(int idx) {
             }
             break;
         case 9: // About
-            window_create(fb_get_width()/2-150, fb_get_height()/2-100, 300, 200, "About NyxOS", NULL);
+            // Centred on the 1024x768 design grid — (1024-300)/2, (768-200)/2 —
+            // NOT on the live framebuffer. Deriving it from fb_get_width() would
+            // have the scale applied twice and land the window left of centre.
+            window_create(362, 284, 300, 200, "About NyxOS", NULL);
             break;
         case 10: // Shutdown
             quit = 1;
@@ -879,6 +882,166 @@ void compositor_init(void) {
     init_desktop_icons();
 }
 
+// Every window_create() call site writes its geometry as literals — 640x400 for
+// the Terminal, 580x480 for Paint. Those numbers were all authored while looking
+// at 1024x768, so that is the grid they are expressed in. State it once here
+// instead of leaving it as folklore in nineteen call sites.
+#define DESIGN_W 1024
+#define DESIGN_H  768
+
+// Geometry scales are Q16.16. The extra precision is not fussiness — see
+// scale_u below for what Q8.8 actually cost.
+#define SCALE_ONE 65536u
+
+// Scale from the design grid to the live framebuffer, aspect-preserving and
+// SHRINK-ONLY. Shrinking is the half that matters: at 640x480 the Terminal's
+// authored 640x400 is the entire screen width and most of its height, so v5.9.5's
+// clamp — which could only cap it at the screen edge — turned "a window" into
+// "the desktop". Scaled instead, it lands at 400x250 and 640x480 gets the same
+// layout as 1024x768, just smaller.
+//
+// Growing is deliberately NOT done. On a 1280x1024 screen the right answer is
+// more room for windows, not one bigger window, and blowing up fixed-pixel
+// content (the font, the calculator's button grid) would only make it blurrier.
+static uint32_t design_scale(void) {
+    uint32_t sx = (fb_get_width()  * SCALE_ONE) / DESIGN_W;
+    uint32_t sy = (fb_get_height() * SCALE_ONE) / DESIGN_H;
+    uint32_t s  = sx < sy ? sx : sy;
+    return s > SCALE_ONE ? SCALE_ONE : s;
+}
+
+// Apply a scale, rounding to nearest instead of truncating.
+//
+// Both halves of that matter, because these scales get applied AGAIN when the
+// resolution changes back, so any systematic bias compounds every time the user
+// toggles modes. Measured on the real thing at Q8.8: 1024 -> 640 -> 1024 brought
+// the Terminal back one pixel narrower, every single round trip. The culprit was
+// the scale itself — 1024/640 is 1.6, which Q8.8 can only hold as 409/256 =
+// 1.5977, so each round trip quietly multiplied the window by 0.9985.
+//
+// Q16.16 holds it as 104857/65536 = 1.59999, and with round-to-nearest the size
+// round-trips exactly: 640 -> 400 -> 640, measured identical over three trips.
+//
+// POSITION can still move one pixel, once. A window at x=300 maps to 187.5 on
+// the smaller screen, and no amount of precision decides that tie for us — it
+// lands on 188 and comes back as 301. That is lost information, not lost
+// precision. What matters is that it then stays there: 301 -> 188 -> 301 is a
+// fixed point, so the shift happens on the first trip and never again (verified
+// over three consecutive 1024 -> 640 -> 1024 cycles).
+static inline int scale_i(int v, uint32_t s) {
+    return (int)(((int64_t)v * (int)s + (SCALE_ONE / 2)) >> 16);
+}
+static inline uint32_t scale_u(uint32_t v, uint32_t s) {
+    return (uint32_t)(((uint64_t)v * s + (SCALE_ONE / 2)) >> 16);
+}
+
+// Clamp a window INTO the current framebuffer. Shared by window_create (born
+// on-screen) and windows_reflow (stays on-screen across a mode change) so the
+// two paths cannot drift apart.
+//
+// Order matters: cap the SIZE against the usable area first, then move the
+// window back inside, then floor at the origin — repositioning before capping
+// would just push an oversized window off the opposite edge.
+static void window_clamp(window_t* win) {
+    int fw = (int)fb_get_width();
+    int fh = (int)fb_get_height();
+    int usable_h = fh - TASKBAR_H - TITLE_H;
+    if ((int)win->w > fw) win->w = (uint32_t)fw;
+    if ((int)win->h > usable_h && usable_h > 0) win->h = (uint32_t)usable_h;
+    if (win->x + (int)win->w > fw) win->x = fw - (int)win->w;
+    if (win->y + (int)win->h + TITLE_H > fh - TASKBAR_H)
+        win->y = fh - TASKBAR_H - (int)win->h - TITLE_H;
+    if (win->x < 0) win->x = 0;
+    if (win->y < 0) win->y = 0;
+}
+
+// Re-flow every open window when the screen size changes underneath it.
+//
+// Both of the geometry guards so far only run at BIRTH — v5.9.5 clamps a window
+// as it is created, and the scaling above sizes it as it is created. Nothing had
+// ever revisited a window that was already open when the mode changed, and the
+// most visible casualty was the Settings window itself: switching 1024x768 ->
+// 640x480 from its own Display tab left the window being clicked hanging 20px
+// off the right edge and 18px under the taskbar.
+//
+// Scale by the OLD->NEW screen ratio rather than re-deriving from the design
+// grid, so a window the user has since dragged or resized keeps the arrangement
+// they chose instead of snapping back to wherever it was authored.
+static void windows_reflow(uint32_t old_fw, uint32_t old_fh) {
+    if (!old_fw || !old_fh) return;
+    uint32_t sx = (fb_get_width()  * SCALE_ONE) / old_fw;
+    uint32_t sy = (fb_get_height() * SCALE_ONE) / old_fh;
+
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        window_t* win = windows[i];
+        if (!win) continue;
+
+        // normal_* has to travel too. It is where un-maximising lands, so leaving
+        // it on the old screen's coordinates would stage a window that looks fine
+        // while maximised and jumps off-screen the moment it is restored.
+        win->normal_x = scale_i(win->normal_x, sx);
+        win->normal_y = scale_i(win->normal_y, sy);
+        win->normal_w = scale_u(win->normal_w, sx);
+        win->normal_h = scale_u(win->normal_h, sy);
+        if (win->normal_w < MIN_WIN_W) win->normal_w = MIN_WIN_W;
+        if (win->normal_h < MIN_WIN_H) win->normal_h = MIN_WIN_H;
+
+        if (win->state == WSTATE_MAXIMIZED) {
+            // A maximised window is defined by the screen, not by its history:
+            // re-derive it, or rounding would leave a seam at the edge.
+            //
+            // Only reachable by clicking the title-bar maximise button, which the
+            // headless harness cannot do (PS/2 only, and the monitor never emits
+            // the button), so this branch is reasoned rather than exercised. What
+            // makes that acceptable is that its failure mode is already covered:
+            // scaling a maximised window instead would give the right width and
+            // an over-tall height, and window_clamp caps height at exactly
+            // fh - TASKBAR_H - TITLE_H — the maximised height. The clamp lands on
+            // the same answer, and the clamp IS exercised.
+            win->x = 0; win->y = 0;
+            win->w = fb_get_width();
+            win->h = fb_get_height() - TASKBAR_H - TITLE_H;
+            continue;
+        }
+
+        win->x = scale_i(win->x, sx);
+        win->y = scale_i(win->y, sy);
+        win->w = scale_u(win->w, sx);
+        win->h = scale_u(win->h, sy);
+        if (win->w < MIN_WIN_W) win->w = MIN_WIN_W;
+        if (win->h < MIN_WIN_H) win->h = MIN_WIN_H;
+        window_clamp(win);
+    }
+}
+
+// Switch the display mode and bring the whole desktop across with it.
+//
+// One function because there are now two ways in — the Settings Display tab and
+// the `setres` shell command — and a mode switch that forgot half its follow-up
+// work would be a bug you could only see at one resolution. It also gives the
+// re-flow a seam a script can drive, instead of the change being reachable only
+// by clicking a button inside the very window the re-flow has to rescue.
+void display_set_mode(uint32_t w, uint32_t h) {
+    uint32_t old_fw = fb_get_width(), old_fh = fb_get_height();
+    if (w == old_fw && h == old_fh) return;
+
+    printf("[DISPLAY] Switching to %ux%u...\n", w, h);
+    vbe_set_mode(w, h, 32);
+    fb_init(w, h, 32, (void*)0xE0000000);
+
+    // Re-flow the desktop icons for the new width. Without this the layout kept
+    // the OLD screen's coordinates, so shrinking the resolution stranded icons
+    // off the right edge with no way to reach them. A full re-flow (rather than
+    // clamping each icon back inside) is what desktops conventionally do on a
+    // mode change, and it cannot leave two icons stacked on one another the way
+    // clamping to the edge would.
+    init_desktop_icons();
+    windows_reflow(old_fw, old_fh);
+
+    printf("[DISPLAY] Now %ux%u, %d window(s) re-flowed\n",
+           fb_get_width(), fb_get_height(), window_count);
+}
+
 window_t* window_create(int x, int y, uint32_t w, uint32_t h, const char* title, window_draw_fn draw) {
     if (window_count >= MAX_WINDOWS) return NULL;
     int slot = -1;
@@ -894,36 +1057,38 @@ window_t* window_create(int x, int y, uint32_t w, uint32_t h, const char* title,
     // garbage value passes that guard and is then CALLED, so opening a window
     // could jump to an arbitrary address. Zero first, assign after.
     memset_asm(win, 0, sizeof(window_t));
+
+    // Map the authored geometry onto this screen BEFORE the minimum-size floor
+    // and the clamp. Order is the whole point: once everything has shrunk to fit,
+    // the clamp usually has nothing left to do, so it goes back to being the
+    // safety net it was meant to be instead of the thing that decides the layout.
+    //
+    // Position scales with size, or a window shrunk to 62% of its width would
+    // still start at its full-size x and crowd the right edge.
+    {
+        uint32_t s = design_scale();
+        if (s < SCALE_ONE) {
+            w = scale_u(w, s); h = scale_u(h, s);
+            x = scale_i(x, s); y = scale_i(y, s);
+        }
+    }
     win->w = w < MIN_WIN_W ? MIN_WIN_W : w;
     win->h = h < MIN_WIN_H ? MIN_WIN_H : h;
-
-    // Clamp the new window INTO the framebuffer. Callers pass fixed geometry —
-    // the two demo windows are literally window_create(200,120,450,200,...), which
-    // spans x=200..650 and so hangs off the right edge of the 640x480 mode Settings
-    // offers. A window born partly off-screen is not just ugly, it can be
-    // unreachable: the title bar is the drag handle, so if that is what went off
-    // the edge there is no way to pull the window back. Clamping here rather than
-    // at each call site means no future caller can reintroduce it either.
-    //
-    // Order matters: cap the SIZE against the usable area first, then move the
-    // window back inside, then floor at the origin — repositioning before capping
-    // would just push an oversized window off the opposite edge.
-    {
-        int fw = (int)fb_get_width();
-        int usable_h = (int)fb_get_height() - TASKBAR_H - TITLE_H;
-        if ((int)win->w > fw)       win->w = (uint32_t)fw;
-        if ((int)win->h > usable_h && usable_h > 0) win->h = (uint32_t)usable_h;
-        if (x + (int)win->w > fw)   x = fw - (int)win->w;
-        if (y + (int)win->h + TITLE_H > (int)fb_get_height() - TASKBAR_H)
-            y = (int)fb_get_height() - TASKBAR_H - (int)win->h - TITLE_H;
-        if (x < 0) x = 0;
-        if (y < 0) y = 0;
-    }
     win->x = x; win->y = y;
+
+    // Backstop for whatever the scale did not save: a window born partly
+    // off-screen is not just ugly, it can be unreachable, because the title bar
+    // is the drag handle — if that is what went off the edge there is no way to
+    // pull the window back. Clamping here rather than at each call site means no
+    // future caller can reintroduce it either.
+    window_clamp(win);
     // normal_* is what un-maximising restores to, so it must record the CLAMPED
     // geometry — copying the caller's raw request would send the window straight
     // back off-screen the first time it was maximised and restored.
-    win->normal_x = x; win->normal_y = y; win->normal_w = win->w; win->normal_h = win->h;
+    // (Read these from win->, not from the local x/y: window_clamp adjusts the
+    // window, so the locals still hold the caller's unclamped request.)
+    win->normal_x = win->x; win->normal_y = win->y;
+    win->normal_w = win->w; win->normal_h = win->h;
     win->z_order = window_count;
     win->visible = 1; win->state = WSTATE_NORMAL;
     win->dragging = 0; win->resizing = 0;
@@ -1175,20 +1340,9 @@ static void settings_win_click(window_t* win, int mx, int my, int btn) {
             int bx = cx + 10 + i * (btn_w + 8);
             if (mx >= bx && mx < bx + btn_w && my >= y && my < y + btn_h) {
                 // Set resolution
-                uint32_t old_fw = fb_get_width(), old_fh = fb_get_height();
-                if (res_modes[i].w != old_fw || res_modes[i].h != old_fh) {
-                    printf("[SETTINGS] Switching to %ux%u...\n", res_modes[i].w, res_modes[i].h);
-                    vbe_set_mode(res_modes[i].w, res_modes[i].h, 32);
-                    fb_init(res_modes[i].w, res_modes[i].h, 32, (void*)0xE0000000);
-                    // Re-flow the desktop icons for the new width. Without this the
-                    // layout kept the OLD screen's coordinates, so shrinking the
-                    // resolution stranded icons off the right edge with no way to
-                    // reach them. A full re-flow (rather than clamping each icon
-                    // back inside) is what desktops conventionally do on a mode
-                    // change, and it cannot leave two icons stacked on one another
-                    // the way clamping to the edge would.
-                    init_desktop_icons();
-                }
+                // Note this runs while Settings is the window handling the click,
+                // so the window doing the switching is itself re-flowed.
+                display_set_mode(res_modes[i].w, res_modes[i].h);
                 return;
             }
         }
