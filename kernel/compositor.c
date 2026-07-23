@@ -970,6 +970,7 @@ static void window_clamp(window_t* win) {
 // Defined further down beside window_snap; forward-declared because the re-flow
 // below needs to re-derive snapped windows onto the new framebuffer.
 static void apply_snap_geom(window_t* win);
+static int  win_is_snapped(int state);
 
 static void windows_reflow(uint32_t old_fw, uint32_t old_fh) {
     if (!old_fw || !old_fh) return;
@@ -1003,7 +1004,7 @@ static void windows_reflow(uint32_t old_fw, uint32_t old_fh) {
             win->h = fb_get_height() - TASKBAR_H - TITLE_H;
             continue;
         }
-        if (win->state == WSTATE_SNAP_LEFT || win->state == WSTATE_SNAP_RIGHT) {
+        if (win_is_snapped(win->state)) {
             apply_snap_geom(win);
             continue;
         }
@@ -1224,19 +1225,52 @@ static void save_normal_geom(window_t* win) {
 }
 
 // Fill a snapped window's rect for the CURRENT framebuffer. Shared by window_snap
-// (initial placement) and windows_reflow (re-derive on a mode change) so the two
-// paths cannot drift — the same reason maximize is re-derived rather than scaled.
-// The right half takes the odd pixel (w = fw - fw/2) so left+right exactly tile
-// the width with no one-pixel gap or overlap down the middle.
+// The snap states form a 2-axis grid: a horizontal side (left/right) and a
+// vertical zone (full height, top half, or bottom half). These four accessors
+// keep the axis logic in one place so the chord handler and the geometry code
+// agree on what each state means.
+static int win_is_snapped(int s) {
+    return s == WSTATE_SNAP_LEFT || s == WSTATE_SNAP_RIGHT ||
+           s == WSTATE_SNAP_TL   || s == WSTATE_SNAP_TR   ||
+           s == WSTATE_SNAP_BL   || s == WSTATE_SNAP_BR;
+}
+static int win_snap_left(int s) {
+    return s == WSTATE_SNAP_LEFT || s == WSTATE_SNAP_TL || s == WSTATE_SNAP_BL;
+}
+// Vertical zone: 0 = full height (a half), 1 = top quarter, 2 = bottom quarter.
+static int win_snap_vzone(int s) {
+    if (s == WSTATE_SNAP_TL || s == WSTATE_SNAP_TR) return 1;
+    if (s == WSTATE_SNAP_BL || s == WSTATE_SNAP_BR) return 2;
+    return 0;
+}
+static int win_snap_state(int left, int vzone) {
+    if (vzone == 1) return left ? WSTATE_SNAP_TL : WSTATE_SNAP_TR;
+    if (vzone == 2) return left ? WSTATE_SNAP_BL : WSTATE_SNAP_BR;
+    return left ? WSTATE_SNAP_LEFT : WSTATE_SNAP_RIGHT;
+}
+
+// Fill a snapped window's rect for the CURRENT framebuffer from its state's two
+// axes. Shared by window_snap (initial placement) and windows_reflow (re-derive
+// on a mode change) so the two paths cannot drift — the same reason maximize is
+// re-derived rather than scaled. The far edges take the odd pixel (right w =
+// fw - fw/2, bottom h = rest) so the two tiles on each axis meet with no
+// one-pixel gap or overlap.
 static void apply_snap_geom(window_t* win) {
     uint32_t fw = fb_get_width();
-    uint32_t half = fw / 2;
-    win->y = 0;
-    win->h = fb_get_height() - TASKBAR_H - TITLE_H;
-    if (win->state == WSTATE_SNAP_LEFT) {
-        win->x = 0;          win->w = half;
-    } else {
-        win->x = (int)half;  win->w = fw - half;
+    uint32_t half_w = fw / 2;
+    uint32_t vtotal = fb_get_height() - TASKBAR_H;   // usable height incl. title bars
+    uint32_t half_v = vtotal / 2;
+    int vz = win_snap_vzone(win->state);
+
+    if (win_snap_left(win->state)) { win->x = 0;            win->w = half_w; }
+    else                           { win->x = (int)half_w;  win->w = fw - half_w; }
+
+    if (vz == 1) {          // top quarter
+        win->y = 0;               win->h = half_v - TITLE_H;
+    } else if (vz == 2) {   // bottom quarter
+        win->y = (int)half_v;     win->h = vtotal - half_v - TITLE_H;
+    } else {                // full-height half
+        win->y = 0;               win->h = vtotal - TITLE_H;
     }
 }
 
@@ -1251,17 +1285,44 @@ void window_maximize(int id) {
     win->state = WSTATE_MAXIMIZED;
 }
 
-// Tile the focused window to the left (left=1) or right half of the usable area.
-// Snapping to the side it is already on toggles back to the pre-snap geometry,
-// which is what makes Alt+Left a spring-loaded "un-snap" too.
+// Alt+Left / Alt+Right: set the horizontal side of the snap.
+//  - from normal/maximized: snap to the full-height half on that side;
+//  - from a snap already on that side: toggle back to the pre-snap geometry
+//    (this is what makes Alt+Left double as a spring-loaded un-snap);
+//  - from a snap on the OTHER side: flip sides, keeping the vertical zone, so a
+//    top-right quarter slides to a top-left quarter.
 void window_snap(int id, int left) {
     window_t* win = find_window(id);
     if (!win) return;
-    int target = left ? WSTATE_SNAP_LEFT : WSTATE_SNAP_RIGHT;
-    if (win->state == target) { window_restore(id); return; }
-    save_normal_geom(win);
-    win->state = target;
+    if (win_is_snapped(win->state)) {
+        if (win_snap_left(win->state) == left) { window_restore(id); return; }
+        win->state = win_snap_state(left, win_snap_vzone(win->state));
+    } else {
+        save_normal_geom(win);
+        win->state = win_snap_state(left, 0);   // full-height half
+    }
     apply_snap_geom(win);
+}
+
+// Alt+Up / Alt+Down when the window is already snapped: slide the vertical zone
+// along a single ladder  max <- top <- half <- bottom <- normal. up=1 climbs
+// toward maximize, up=0 descends toward the un-snapped window. The ends spill
+// out of the snap grid: climbing past "top" maximizes, descending past "bottom"
+// restores. Returns nothing; the caller only reaches here when win_is_snapped.
+static void window_snap_vslide(int id, int up) {
+    window_t* win = find_window(id);
+    if (!win) return;
+    int left = win_snap_left(win->state);
+    int vz   = win_snap_vzone(win->state);   // 0 half, 1 top, 2 bottom
+    if (up) {
+        if (vz == 0)      { win->state = win_snap_state(left, 1); apply_snap_geom(win); } // half -> top
+        else if (vz == 2) { win->state = win_snap_state(left, 0); apply_snap_geom(win); } // bottom -> half
+        else                window_maximize(win->id);                                     // top -> maximize
+    } else {
+        if (vz == 1)      { win->state = win_snap_state(left, 0); apply_snap_geom(win); } // top -> half
+        else if (vz == 0) { win->state = win_snap_state(left, 2); apply_snap_geom(win); } // half -> bottom
+        else                window_restore(win->id);                                      // bottom -> un-snap
+    }
 }
 
 void window_restore(int id) {
@@ -1295,7 +1356,7 @@ static void demo_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch
     font_draw_string(cx + 5, cy + 65, "Minimize/Maximize/Close", fb_rgb(160,160,160), fb_rgb(35,35,40));
     font_draw_string(cx + 5, cy + 85, "Alt+Tab switch  Alt+F4 close", fb_rgb(160,160,160), fb_rgb(35,35,40));
     font_draw_string(cx + 5, cy + 105, "Alt+Up/Down maximize/min", fb_rgb(160,160,160), fb_rgb(35,35,40));
-    font_draw_string(cx + 5, cy + 125, "Alt+Left/Right snap half", fb_rgb(160,160,160), fb_rgb(35,35,40));
+    font_draw_string(cx + 5, cy + 125, "Alt+Arrows tile/snap window", fb_rgb(160,160,160), fb_rgb(35,35,40));
     char buf[32];
     snprintf(buf, sizeof(buf), "ID: %d", win->id);
     font_draw_string(cx + 5, cy + 145, buf, fb_rgb(255,255,0), fb_rgb(35,35,40));
@@ -1957,31 +2018,36 @@ void compositor_run(void) {
                         redraw = 1;
                         goto done_click;
                     }
-                    if (k == KEY_UP) {                 // Alt+Up: maximise
-                        if (awin->state != WSTATE_MAXIMIZED)
+                    if (k == KEY_UP) {                 // Alt+Up: climb the ladder
+                        // While snapped, Up refines the vertical zone (half -> top
+                        // quarter -> maximise). Otherwise it just maximises.
+                        if (win_is_snapped(awin->state))
+                            window_snap_vslide(awin->id, 1);
+                        else if (awin->state != WSTATE_MAXIMIZED)
                             window_maximize(awin->id);
                         redraw = 1;
                         goto done_click;
                     }
-                    if (k == KEY_DOWN) {               // Alt+Down: un-arrange, else minimise
-                        // Restore covers maximised AND snapped — any non-normal
-                        // arrangement steps back to the pre-arrangement rect
-                        // before Alt+Down will minimise a plain window. (A focused
-                        // window is never minimised, so state != NORMAL here means
-                        // maximised or snapped.)
-                        if (awin->state != WSTATE_NORMAL)
+                    if (k == KEY_DOWN) {               // Alt+Down: descend the ladder
+                        // Snapped: Down refines the vertical zone (top -> half ->
+                        // bottom -> un-snap). Maximised: restore. Plain: minimise.
+                        // (A focused window is never minimised, so the else really
+                        // is a plain normal window.)
+                        if (win_is_snapped(awin->state))
+                            window_snap_vslide(awin->id, 0);
+                        else if (awin->state == WSTATE_MAXIMIZED)
                             window_restore(awin->id);
                         else
                             window_minimize(awin->id);
                         redraw = 1;
                         goto done_click;
                     }
-                    if (k == KEY_LEFT) {               // Alt+Left: snap to left half
+                    if (k == KEY_LEFT) {               // Alt+Left: snap/flip left (toggle off if already left)
                         window_snap(awin->id, 1);
                         redraw = 1;
                         goto done_click;
                     }
-                    if (k == KEY_RIGHT) {              // Alt+Right: snap to right half
+                    if (k == KEY_RIGHT) {              // Alt+Right: snap/flip right (toggle off if already right)
                         window_snap(awin->id, 0);
                         redraw = 1;
                         goto done_click;

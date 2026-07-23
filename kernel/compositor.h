@@ -46,6 +46,10 @@ enum {
     WSTATE_MAXIMIZED,
     WSTATE_SNAP_LEFT,   // tiled to the left half of the usable area
     WSTATE_SNAP_RIGHT,  // tiled to the right half
+    WSTATE_SNAP_TL,     // top-left quarter
+    WSTATE_SNAP_TR,     // top-right quarter
+    WSTATE_SNAP_BL,     // bottom-left quarter
+    WSTATE_SNAP_BR,     // bottom-right quarter
 };
 
 typedef struct window window_t;
