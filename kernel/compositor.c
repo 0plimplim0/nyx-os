@@ -967,6 +967,10 @@ static void window_clamp(window_t* win) {
 // Scale by the OLD->NEW screen ratio rather than re-deriving from the design
 // grid, so a window the user has since dragged or resized keeps the arrangement
 // they chose instead of snapping back to wherever it was authored.
+// Defined further down beside window_snap; forward-declared because the re-flow
+// below needs to re-derive snapped windows onto the new framebuffer.
+static void apply_snap_geom(window_t* win);
+
 static void windows_reflow(uint32_t old_fw, uint32_t old_fh) {
     if (!old_fw || !old_fh) return;
     uint32_t sx = (fb_get_width()  * SCALE_ONE) / old_fw;
@@ -986,21 +990,21 @@ static void windows_reflow(uint32_t old_fw, uint32_t old_fh) {
         if (win->normal_w < MIN_WIN_W) win->normal_w = MIN_WIN_W;
         if (win->normal_h < MIN_WIN_H) win->normal_h = MIN_WIN_H;
 
+        // Maximised and snapped windows are defined by the SCREEN, not by their
+        // history: re-derive their rect from the new framebuffer instead of
+        // scaling it, or rounding would leave a seam at the edge (maximised) or
+        // down the middle (snapped). normal_* was already scaled above, so
+        // restoring one of these later still lands where the user left it.
+        // (Since v5.9.7 Alt+Up maximises and Alt+Left/Right snap from the
+        // keyboard, so both of these branches are now headlessly exercised.)
         if (win->state == WSTATE_MAXIMIZED) {
-            // A maximised window is defined by the screen, not by its history:
-            // re-derive it, or rounding would leave a seam at the edge.
-            //
-            // Only reachable by clicking the title-bar maximise button, which the
-            // headless harness cannot do (PS/2 only, and the monitor never emits
-            // the button), so this branch is reasoned rather than exercised. What
-            // makes that acceptable is that its failure mode is already covered:
-            // scaling a maximised window instead would give the right width and
-            // an over-tall height, and window_clamp caps height at exactly
-            // fh - TASKBAR_H - TITLE_H — the maximised height. The clamp lands on
-            // the same answer, and the clamp IS exercised.
             win->x = 0; win->y = 0;
             win->w = fb_get_width();
             win->h = fb_get_height() - TASKBAR_H - TITLE_H;
+            continue;
+        }
+        if (win->state == WSTATE_SNAP_LEFT || win->state == WSTATE_SNAP_RIGHT) {
+            apply_snap_geom(win);
             continue;
         }
 
@@ -1208,16 +1212,56 @@ void window_minimize(int id) {
     if (focused_id == id) focused_id = 0;
 }
 
+// Snapshot the restore-to geometry — but ONLY from the normal state. If the
+// window is already maximized or snapped, normal_* already holds the true
+// pre-arrangement rect; overwriting it with the current full/half-screen one
+// would make "restore" restore to the arrangement instead of the original.
+static void save_normal_geom(window_t* win) {
+    if (win->state == WSTATE_NORMAL) {
+        win->normal_x = win->x; win->normal_y = win->y;
+        win->normal_w = win->w; win->normal_h = win->h;
+    }
+}
+
+// Fill a snapped window's rect for the CURRENT framebuffer. Shared by window_snap
+// (initial placement) and windows_reflow (re-derive on a mode change) so the two
+// paths cannot drift — the same reason maximize is re-derived rather than scaled.
+// The right half takes the odd pixel (w = fw - fw/2) so left+right exactly tile
+// the width with no one-pixel gap or overlap down the middle.
+static void apply_snap_geom(window_t* win) {
+    uint32_t fw = fb_get_width();
+    uint32_t half = fw / 2;
+    win->y = 0;
+    win->h = fb_get_height() - TASKBAR_H - TITLE_H;
+    if (win->state == WSTATE_SNAP_LEFT) {
+        win->x = 0;          win->w = half;
+    } else {
+        win->x = (int)half;  win->w = fw - half;
+    }
+}
+
 void window_maximize(int id) {
     window_t* win = find_window(id);
     if (!win) return;
     if (win->state == WSTATE_MAXIMIZED) { window_restore(id); return; }
-    win->normal_x = win->x; win->normal_y = win->y;
-    win->normal_w = win->w; win->normal_h = win->h;
+    save_normal_geom(win);   // no-op if coming from a snap, preserving the original
     win->x = 0; win->y = 0;
     win->w = fb_get_width();
     win->h = fb_get_height() - TASKBAR_H - TITLE_H;
     win->state = WSTATE_MAXIMIZED;
+}
+
+// Tile the focused window to the left (left=1) or right half of the usable area.
+// Snapping to the side it is already on toggles back to the pre-snap geometry,
+// which is what makes Alt+Left a spring-loaded "un-snap" too.
+void window_snap(int id, int left) {
+    window_t* win = find_window(id);
+    if (!win) return;
+    int target = left ? WSTATE_SNAP_LEFT : WSTATE_SNAP_RIGHT;
+    if (win->state == target) { window_restore(id); return; }
+    save_normal_geom(win);
+    win->state = target;
+    apply_snap_geom(win);
 }
 
 void window_restore(int id) {
@@ -1251,11 +1295,12 @@ static void demo_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch
     font_draw_string(cx + 5, cy + 65, "Minimize/Maximize/Close", fb_rgb(160,160,160), fb_rgb(35,35,40));
     font_draw_string(cx + 5, cy + 85, "Alt+Tab switch  Alt+F4 close", fb_rgb(160,160,160), fb_rgb(35,35,40));
     font_draw_string(cx + 5, cy + 105, "Alt+Up/Down maximize/min", fb_rgb(160,160,160), fb_rgb(35,35,40));
+    font_draw_string(cx + 5, cy + 125, "Alt+Left/Right snap half", fb_rgb(160,160,160), fb_rgb(35,35,40));
     char buf[32];
     snprintf(buf, sizeof(buf), "ID: %d", win->id);
-    font_draw_string(cx + 5, cy + 125, buf, fb_rgb(255,255,0), fb_rgb(35,35,40));
-    snprintf(buf, sizeof(buf), "WS: %d", win->workspace);
     font_draw_string(cx + 5, cy + 145, buf, fb_rgb(255,255,0), fb_rgb(35,35,40));
+    snprintf(buf, sizeof(buf), "WS: %d", win->workspace);
+    font_draw_string(cx + 5, cy + 165, buf, fb_rgb(255,255,0), fb_rgb(35,35,40));
 }
 
 static void about_draw_fn(window_t* win, int cx, int cy, uint32_t cw, uint32_t ch) {
@@ -1478,9 +1523,10 @@ static void draw_desktop_icons(void) {
 }
 
 static void draw_welcome_windows(void) {
-    // 320 tall (was 280) so the two added keyboard-shortcut lines still clear the
-    // bottom edge at 640x480, where design-grid scaling shrinks this to ~0.625.
-    window_create(80, 40, 400, 320, "Welcome to NyxOS", demo_draw_fn);
+    // 360 tall so all the keyboard-shortcut hint lines (the last is WS: at cy+165,
+    // ~181 px) still clear the bottom edge at 640x480, where design-grid scaling
+    // shrinks this to 0.625 (=> 203 px of client height, comfortably above 181).
+    window_create(80, 40, 400, 360, "Welcome to NyxOS", demo_draw_fn);
     window_create(200, 120, 450, 200, "About NyxOS", about_draw_fn);
     {
         window_t* twin = window_create(300, 200, 640, 400, "Terminal", terminal_win_draw);
@@ -1917,11 +1963,26 @@ void compositor_run(void) {
                         redraw = 1;
                         goto done_click;
                     }
-                    if (k == KEY_DOWN) {               // Alt+Down: restore, else minimise
-                        if (awin->state == WSTATE_MAXIMIZED)
+                    if (k == KEY_DOWN) {               // Alt+Down: un-arrange, else minimise
+                        // Restore covers maximised AND snapped — any non-normal
+                        // arrangement steps back to the pre-arrangement rect
+                        // before Alt+Down will minimise a plain window. (A focused
+                        // window is never minimised, so state != NORMAL here means
+                        // maximised or snapped.)
+                        if (awin->state != WSTATE_NORMAL)
                             window_restore(awin->id);
                         else
                             window_minimize(awin->id);
+                        redraw = 1;
+                        goto done_click;
+                    }
+                    if (k == KEY_LEFT) {               // Alt+Left: snap to left half
+                        window_snap(awin->id, 1);
+                        redraw = 1;
+                        goto done_click;
+                    }
+                    if (k == KEY_RIGHT) {              // Alt+Right: snap to right half
+                        window_snap(awin->id, 0);
                         redraw = 1;
                         goto done_click;
                     }

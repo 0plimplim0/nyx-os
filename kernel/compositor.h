@@ -44,6 +44,8 @@ enum {
     WSTATE_NORMAL,
     WSTATE_MINIMIZED,
     WSTATE_MAXIMIZED,
+    WSTATE_SNAP_LEFT,   // tiled to the left half of the usable area
+    WSTATE_SNAP_RIGHT,  // tiled to the right half
 };
 
 typedef struct window window_t;
@@ -91,6 +93,7 @@ void window_resize(int id, uint32_t w, uint32_t h);
 void window_minimize(int id);
 void window_maximize(int id);
 void window_restore(int id);
+void window_snap(int id, int left);   // tile the window to the left (1) or right (0) half
 void window_set_workspace(int id, int ws);
 int  window_get_count(void);
 int  window_get_ids(int* ids, int max);
